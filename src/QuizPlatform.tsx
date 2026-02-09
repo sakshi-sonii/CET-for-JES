@@ -175,7 +175,7 @@ const QuizPlatform: React.FC = () => {
     <>
       {!user && view === 'login' && (
         <LoginView 
-          onLoginSuccess={(token, userData) => {
+          onLoginSuccess={(_, userData) => {
             setUser(userData);
             setView(userData.role);
           }} 
