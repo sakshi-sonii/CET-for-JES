@@ -37,7 +37,7 @@ const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, courses }) => {
       });
 
       if (res.token) {
-        const userData = { ...res.user, id: res.user._id || res.user.id };
+        const userData = { ...res.user, _id: res.user._id || res.user.id };
 
         if ((userData.role === 'student' || userData.role === 'teacher') && !userData.approved) {
           throw new Error("Your account is pending admin approval. Please try again later.");
@@ -186,7 +186,7 @@ const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, courses }) => {
                 >
                   <option value="">Select Course</option>
                   {courses.map((c) => (
-                    <option key={c.id} value={c.id}>
+                    <option key={c._id} value={c._id}>
                       {c.name}
                     </option>
                   ))}
@@ -203,7 +203,6 @@ const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, courses }) => {
             {submitting ? "Please wait..." : isLogin ? "Login" : "Register"}
           </button>
         </div>
-
       </div>
     </div>
   );

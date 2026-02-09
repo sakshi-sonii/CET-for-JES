@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Award } from 'lucide-react';
-import type { User, Test, Course, Material, Attempt } from './types';
+import type { User, Test, Course, Material, TestSubmission } from './types';
 import { api } from './api';
 import LoginView from './views/LoginView';
 import AdminView from './views/AdminView';
@@ -14,25 +14,22 @@ const QuizPlatform: React.FC = () => {
   const [tests, setTests] = useState<Test[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [attempts, setAttempts] = useState<TestSubmission[]>([]);
   const [view, setView] = useState<string>('login');
   const [currentTest, setCurrentTest] = useState<Test | null>(null);
-  const [answers, setAnswers] = useState<Record<number, number>>({});
-  const [markedForReview, setMarkedForReview] = useState<Set<number>>(new Set());
-  const [shuffledOrder, setShuffledOrder] = useState<number[]>([]);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
-  const [timeLeft, setTimeLeft] = useState<number>(0);
-  const [loading, setLoading] = useState(true); // Changed to true initially
+  const [loading, setLoading] = useState(true);
   const [studentActiveTab, setStudentActiveTab] = useState<string>('tests');
 
+  // Fetch courses on mount (needed for login/register)
   useEffect(() => {
     api("courses").then(setCourses).catch(console.error);
   }, []);
 
+  // Auto-login from stored token
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
-      setLoading(false); // No token, stop loading
+      setLoading(false);
       return;
     }
 
@@ -40,7 +37,10 @@ const QuizPlatform: React.FC = () => {
     api("auth/me", "GET")
       .then(res => {
         if (res?.user) {
-          const userData = { ...res.user, id: res.user._id || res.user.id };
+          const userData: User = {
+            ...res.user,
+            _id: res.user._id || res.user.id,
+          };
           setUser(userData);
           setView(userData.role);
         }
@@ -51,19 +51,33 @@ const QuizPlatform: React.FC = () => {
       .finally(() => setLoading(false));
   }, []);
 
+  // Fetch data when user is set
   const fetchData = useCallback(async () => {
     if (!user) return;
 
     try {
-      const [testsData, attemptsData, materialsData] = await Promise.all([
+      const [testsData, materialsData] = await Promise.all([
         api("tests"),
-        api("attempts"),
         api("materials"),
       ]);
-      
+
       setTests(testsData);
-      setAttempts(attemptsData);
       setMaterials(materialsData);
+
+      // Fetch attempts/submissions
+      try {
+        const attemptsData = await api("test-submissions");
+        setAttempts(attemptsData);
+      } catch {
+        // Fallback: try old endpoint
+        try {
+          const attemptsData = await api("attempts");
+          setAttempts(attemptsData);
+        } catch {
+          console.warn("Could not fetch attempts");
+          setAttempts([]);
+        }
+      }
 
       if (user.role === 'admin') {
         const usersData = await api("users");
@@ -78,57 +92,48 @@ const QuizPlatform: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
-  const submitTest = useCallback(async () => {
+  // ========================
+  // Submit test (called by TakingTestView)
+  // ========================
+  const handleTestSubmit = async (testAnswers: Record<string, number>) => {
     if (!currentTest || !user) return;
 
-    let score = 0;
-    shuffledOrder.forEach((originalIdx, shuffledIdx) => {
-      const q = currentTest.questions[originalIdx];
-      if (answers[shuffledIdx] === q.correct) score++;
-    });
-
     try {
-      await api("attempts", "POST", {
-        testId: currentTest.id,
-        studentId: user.id,
-        score,
-        total: currentTest.questions.length,
-        answers,
-        shuffledOrder,
+      const res = await api("test-submissions", "POST", {
+        testId: currentTest._id,
+        answers: testAnswers,
       });
 
-      alert(`Test submitted! Score: ${score}/${currentTest.questions.length}`);
-      
+      const totalScore = res.totalScore ?? 0;
+      const totalMaxScore = res.totalMaxScore ?? 0;
+      const percentage = res.percentage ?? 0;
+
+      alert(`Test submitted! Score: ${totalScore}/${totalMaxScore} (${percentage}%)`);
+
       setCurrentTest(null);
-      setAnswers({});
-      setMarkedForReview(new Set());
-      setShuffledOrder([]);
-      setCurrentQuestionIndex(0);
       setStudentActiveTab('results');
       setView("student");
-      
-      const attemptsData = await api("attempts");
-      setAttempts(attemptsData);
+
+      // Refresh attempts
+      try {
+        const attemptsData = await api("test-submissions");
+        setAttempts(attemptsData);
+      } catch {
+        try {
+          const attemptsData = await api("attempts");
+          setAttempts(attemptsData);
+        } catch {
+          console.warn("Could not refresh attempts");
+        }
+      }
     } catch (error: any) {
       alert(error.message || "Failed to submit test");
     }
-  }, [currentTest, user, answers, shuffledOrder]);
+  };
 
-  useEffect(() => {
-    if (currentTest && timeLeft > 0) {
-      const timer = setInterval(() => {
-        setTimeLeft(t => {
-          if (t <= 1) {
-            submitTest();
-            return 0;
-          }
-          return t - 1;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [currentTest, timeLeft, submitTest]);
-
+  // ========================
+  // Logout
+  // ========================
   const logout = () => {
     localStorage.removeItem("token");
     setUser(null);
@@ -138,28 +143,19 @@ const QuizPlatform: React.FC = () => {
     setMaterials([]);
     setView('login');
     setCurrentTest(null);
-    setAnswers({});
-    setMarkedForReview(new Set());
-    setShuffledOrder([]);
-    setCurrentQuestionIndex(0);
   };
 
+  // ========================
+  // Start test
+  // ========================
   const startTest = (test: Test) => {
-    const order = test.questions.map((_, idx) => idx);
-    for (let i = order.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [order[i], order[j]] = [order[j], order[i]];
-    }
-    
     setCurrentTest(test);
-    setAnswers({});
-    setMarkedForReview(new Set());
-    setShuffledOrder(order);
-    setCurrentQuestionIndex(0);
-    setTimeLeft(test.duration * 60);
     setView('taking-test');
   };
 
+  // ========================
+  // Loading screen
+  // ========================
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
@@ -171,85 +167,75 @@ const QuizPlatform: React.FC = () => {
     );
   }
 
+  // ========================
+  // Render views
+  // ========================
   return (
     <>
       {!user && view === 'login' && (
-        <LoginView 
+        <LoginView
           onLoginSuccess={(_, userData) => {
-            setUser(userData);
-            setView(userData.role);
-          }} 
-          courses={courses} 
+            const normalizedUser: User = {
+              ...userData,
+              _id: userData._id || userData.id,
+            };
+            setUser(normalizedUser);
+            setView(normalizedUser.role);
+          }}
+          courses={courses}
         />
       )}
+
       {user && view === 'admin' && (
-        <AdminView 
-          user={user} 
-          users={users} 
-          tests={tests} 
-          courses={courses} 
-          attempts={attempts} 
-          onLogout={logout} 
-          onUsersUpdate={setUsers} 
-          onTestsUpdate={setTests} 
-          onCoursesUpdate={setCourses} 
+        <AdminView
+          user={user}
+          users={users}
+          tests={tests}
+          courses={courses}
+          attempts={attempts}
+          onLogout={logout}
+          onUsersUpdate={setUsers}
+          onTestsUpdate={setTests}
+          onCoursesUpdate={setCourses}
         />
       )}
+
       {user && view === 'teacher' && (
-        <TeacherView 
-          user={user} 
-          tests={tests} 
-          courses={courses} 
-          materials={materials} 
-          onLogout={logout} 
-          onTestsUpdate={setTests} 
-          onMaterialsUpdate={setMaterials} 
+        <TeacherView
+          user={user}
+          tests={tests}
+          courses={courses}
+          materials={materials}
+          onLogout={logout}
+          onTestsUpdate={setTests}
+          onMaterialsUpdate={setMaterials}
         />
       )}
+
       {user && view === 'student' && (
-        <StudentView 
-          user={user} 
-          tests={tests} 
-          courses={courses} 
-          materials={materials} 
-          attempts={attempts} 
-          activeTab={studentActiveTab} 
-          onTabChange={setStudentActiveTab} 
-          onStartTest={startTest} 
-          onLogout={logout} 
+        <StudentView
+          user={user}
+          tests={tests}
+          courses={courses}
+          materials={materials}
+          attempts={attempts}
+          activeTab={studentActiveTab}
+          onTabChange={setStudentActiveTab}
+          onStartTest={startTest}
+          onLogout={logout}
         />
       )}
+
       {user && view === 'taking-test' && currentTest && (
-        <TakingTestView 
-          test={currentTest} 
-          answers={answers} 
-          markedForReview={markedForReview} 
-          shuffledOrder={shuffledOrder} 
-          currentQuestionIndex={currentQuestionIndex} 
-          timeLeft={timeLeft} 
-          onAnswerChange={(idx, ans) => setAnswers({...answers, [idx]: ans})} 
-          onMarkReview={() => {
-            const newReview = new Set(markedForReview);
-            if (newReview.has(currentQuestionIndex)) {
-              newReview.delete(currentQuestionIndex);
-            } else {
-              newReview.add(currentQuestionIndex);
+        <TakingTestView
+          test={currentTest}
+          onSubmit={handleTestSubmit}
+          onBack={() => {
+            if (confirm('Are you sure? Your progress will be lost.')) {
+              setCurrentTest(null);
+              setView('student');
             }
-            setMarkedForReview(newReview);
-          }} 
-          onClearAnswer={() => {
-            const newAnswers = {...answers};
-            delete newAnswers[currentQuestionIndex];
-            setAnswers(newAnswers);
-          }} 
-          onPrevious={() => {
-            if (currentQuestionIndex > 0) setCurrentQuestionIndex(currentQuestionIndex - 1);
-          }} 
-          onNext={() => {
-            if (currentQuestionIndex < currentTest.questions.length - 1) setCurrentQuestionIndex(currentQuestionIndex + 1);
-          }} 
-          onSubmit={submitTest} 
-          onGoToQuestion={setCurrentQuestionIndex} 
+          }}
         />
       )}
     </>
