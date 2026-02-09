@@ -23,9 +23,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let query = {};
 
       // Students and Teachers can see materials for their course
-      if (currentUser.role === "student" || currentUser.role === "teacher") {
-        query = { course: currentUser.course };
-      }
+      if (currentUser.role === "student") {
+  query = { course: currentUser.course };
+}
+
+if (currentUser.role === "teacher") {
+  query = { teacherId: currentUser._id };
+}
+
       // Admin can see all materials
 
       const materials = await Material.find(query)
