@@ -1,13 +1,13 @@
-import React from 'react';
-import { Award, LogOut, FileText, BookOpen, ChevronDown } from 'lucide-react';
-import type { User, Test, Course, Material, Attempt } from '../types';
+import React, { useState } from 'react';
+import { Award, LogOut, FileText, BookOpen, ChevronDown, ChevronUp } from 'lucide-react';
+import type { User, Test, Course, Material, TestSubmission } from '../types';
 
 interface StudentViewProps {
   user: User;
   tests: Test[];
   courses: Course[];
   materials: Material[];
-  attempts: Attempt[];
+  attempts: TestSubmission[];
   activeTab: string;
   onTabChange: (tab: string) => void;
   onStartTest: (test: Test) => void;
@@ -25,14 +25,80 @@ const StudentView: React.FC<StudentViewProps> = ({
   onStartTest,
   onLogout,
 }) => {
-  const studentCourse = courses.find(c => c.id === user!.course);
-  const availableTests = tests.filter(t => t.approved && t.active && t.course === user!.course);
+  const [expandedAttempts, setExpandedAttempts] = useState<Set<string>>(new Set());
+  const [expandedSection, setExpandedSection] = useState<string>('physics');
+
+  const toggleAttempt = (attemptId: string) => {
+    const newExpanded = new Set(expandedAttempts);
+    if (newExpanded.has(attemptId)) {
+      newExpanded.delete(attemptId);
+    } else {
+      newExpanded.add(attemptId);
+    }
+    setExpandedAttempts(newExpanded);
+  };
+
+  const studentCourse = courses.find(c => c._id === user.course);
+  const availableTests = tests.filter(t => t.approved && t.active && t.course === user.course);
+
   const myAttempts = attempts.filter(a => {
-    const sid: any = (a as any).studentId;
-    const sidStr = typeof sid === 'string' ? sid : (sid?._id || sid?.id);
-    return String(sidStr) === String(user!.id);
+    const sid: any = a.studentId;
+    const sidStr = typeof sid === 'string' ? sid : (sid?._id);
+    return String(sidStr) === String(user._id);
   });
-  const availableMaterials = materials.filter(m => m.course === user!.course);
+
+  const availableMaterials = materials.filter(m => {
+    const matCourse = typeof m.course === 'string' ? m.course : m.course?._id;
+    return matCourse === user.course;
+  });
+
+  // Helper to get total questions from sections
+  const getTotalQuestions = (test: Test): number => {
+    if (!test.sections) return 0;
+    return test.sections.reduce((sum, s) => sum + (s.questions?.length || 0), 0);
+  };
+
+  // Helper to get total marks from sections
+  const getTotalMarks = (test: Test): number => {
+    if (!test.sections) return 0;
+    return test.sections.reduce((sum, s) => {
+      const marks = s.marksPerQuestion || (s.subject === 'maths' ? 2 : 1);
+      return sum + (s.questions?.length || 0) * marks;
+    }, 0);
+  };
+
+  const getSectionBadgeColor = (subject: string) => {
+    switch (subject) {
+      case 'physics': return 'bg-blue-100 text-blue-800';
+      case 'chemistry': return 'bg-green-100 text-green-800';
+      case 'maths': return 'bg-purple-100 text-purple-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getSectionBorderColor = (subject: string) => {
+    switch (subject) {
+      case 'physics': return 'border-blue-200 bg-blue-50';
+      case 'chemistry': return 'border-green-200 bg-green-50';
+      case 'maths': return 'border-purple-200 bg-purple-50';
+      default: return 'border-gray-200 bg-gray-50';
+    }
+  };
+
+  const getSectionHeaderColor = (subject: string) => {
+    switch (subject) {
+      case 'physics': return 'text-blue-800';
+      case 'chemistry': return 'text-green-800';
+      case 'maths': return 'text-purple-800';
+      default: return 'text-gray-800';
+    }
+  };
+
+  const getScoreColor = (percentage: number) => {
+    if (percentage >= 70) return 'text-green-600';
+    if (percentage >= 40) return 'text-yellow-600';
+    return 'text-red-600';
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -47,7 +113,7 @@ const StudentView: React.FC<StudentViewProps> = ({
           </div>
           <div className="flex items-center gap-4">
             <span className="text-gray-600">Welcome, {user?.name}</span>
-            <button 
+            <button
               onClick={onLogout}
               className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
             >
@@ -60,16 +126,26 @@ const StudentView: React.FC<StudentViewProps> = ({
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="flex gap-4 mb-6 overflow-x-auto">
           {['tests', 'results', 'materials'].map(tab => (
-            <button 
-              key={tab} 
-              onClick={() => onTabChange(tab)} 
-              className={`px-6 py-2 rounded-lg font-medium whitespace-nowrap transition ${activeTab === tab ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
+            <button
+              key={tab}
+              onClick={() => onTabChange(tab)}
+              className={`px-6 py-2 rounded-lg font-medium whitespace-nowrap transition ${
+                activeTab === tab
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-white text-gray-600 hover:bg-gray-100'
+              }`}
             >
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === 'results' && myAttempts.length > 0 && (
+                <span className="ml-2 bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded-full">
+                  {myAttempts.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
 
+        {/* ======================== TESTS TAB ======================== */}
         {activeTab === 'tests' && (
           <div className="space-y-4">
             {availableTests.length === 0 ? (
@@ -79,28 +155,67 @@ const StudentView: React.FC<StudentViewProps> = ({
               </div>
             ) : (
               availableTests.map(t => {
-                const alreadyAttempted = myAttempts.some(a => a.testId === t.id);
+                const alreadyAttempted = myAttempts.some(a => {
+                  const rawTestId: any = a.testId;
+                  const testIdStr = typeof rawTestId === 'string' ? rawTestId : rawTestId?._id;
+                  return testIdStr === t._id;
+                });
+
+                const totalQuestions = getTotalQuestions(t);
+                const totalMarks = getTotalMarks(t);
+
                 return (
-                  <div key={t.id} className="bg-white rounded-lg shadow p-6">
+                  <div key={t._id} className="bg-white rounded-lg shadow p-6">
                     <div className="flex justify-between items-start">
-                      <div>
+                      <div className="flex-1">
                         <h3 className="text-xl font-bold">{t.title}</h3>
-                        <p className="text-gray-600">{t.subject}</p>
-                        <div className="flex gap-4 mt-2 text-sm text-gray-500">
+
+                        {/* Section breakdown */}
+                        {t.sections && t.sections.length > 0 && (
+                          <div className="mt-3">
+                            <div className="flex flex-wrap gap-2 mb-2">
+                              {t.sections.map((section) => (
+                                <span
+                                  key={section.subject}
+                                  className={`px-3 py-1 rounded-full text-xs font-medium ${getSectionBadgeColor(
+                                    section.subject
+                                  )}`}
+                                >
+                                  {section.subject.charAt(0).toUpperCase() + section.subject.slice(1)}
+                                  : {section.questions?.length || 0}Q × {section.marksPerQuestion || (section.subject === 'maths' ? 2 : 1)}m
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Timing and totals */}
+                        <div className="flex flex-wrap gap-4 mt-2 text-sm text-gray-500">
                           <span className="flex items-center gap-1">
-                            ⏱️ {t.duration} min
+                            ⏱️ {t.totalDuration || 180} min total
                           </span>
                           <span className="flex items-center gap-1">
-                            📝 {t.questions.length} questions
+                            📝 {totalQuestions} questions
+                          </span>
+                          <span className="flex items-center gap-1">
+                            🏆 {totalMarks} marks
                           </span>
                         </div>
+
+                        {/* Timing breakdown */}
+                        <div className="mt-2 text-xs text-gray-400">
+                          Part 1: Physics + Chemistry — {t.sectionTimings?.physicsChemistry || 90} min
+                          &nbsp;|&nbsp;
+                          Part 2: Maths — {t.sectionTimings?.maths || 90} min
+                        </div>
                       </div>
-                      <button 
-                        onClick={() => onStartTest(t)} 
+
+                      <button
+                        onClick={() => onStartTest(t)}
                         disabled={alreadyAttempted}
-                        className={`px-6 py-2 rounded-lg font-medium ${
-                          alreadyAttempted 
-                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                        className={`px-6 py-2 rounded-lg font-medium whitespace-nowrap ml-4 ${
+                          alreadyAttempted
+                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                             : 'bg-indigo-600 text-white hover:bg-indigo-700'
                         }`}
                       >
@@ -114,6 +229,7 @@ const StudentView: React.FC<StudentViewProps> = ({
           </div>
         )}
 
+        {/* ======================== RESULTS TAB ======================== */}
         {activeTab === 'results' && (
           <div className="space-y-4">
             {myAttempts.length === 0 ? (
@@ -123,149 +239,245 @@ const StudentView: React.FC<StudentViewProps> = ({
               </div>
             ) : (
               myAttempts.map(a => {
-                const rawTestId: any = (a as any).testId;
-                const testIdStr = typeof rawTestId === 'string' ? rawTestId : (rawTestId?._id || rawTestId?.id);
-                const test = tests.find(t => t.id === testIdStr);
-                if (!test) return null;
-                
-                const percentage = ((a.score / a.total) * 100).toFixed(1);
-                const order = a.shuffledOrder || [];
-                
+                const rawTestId: any = a.testId;
+                const testIdStr = typeof rawTestId === 'string' ? rawTestId : rawTestId?._id;
+                const testTitle = typeof rawTestId === 'object' && rawTestId?.title
+                  ? rawTestId.title
+                  : tests.find(t => t._id === testIdStr)?.title || 'Test';
+
+                const isExpanded = expandedAttempts.has(a._id);
+                const sectionResults = a.sectionResults || [];
+                const percentage = a.percentage || 0;
+
                 return (
-                  <div key={a.id} className="bg-white rounded-lg shadow p-6">
-                    <div className="flex justify-between items-start mb-6">
+                  <div key={a._id} className="bg-white rounded-lg shadow p-6">
+                    {/* Header with score */}
+                    <div className="flex justify-between items-start mb-4">
                       <div>
-                        <h3 className="text-xl font-bold">{test.title}</h3>
-                        <p className="text-gray-600">{test.subject}</p>
+                        <h3 className="text-xl font-bold">{testTitle}</h3>
                         <p className="text-sm text-gray-500 mt-1">
                           Submitted: {new Date(a.submittedAt).toLocaleString()}
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className={`text-3xl font-bold ${
-                          parseFloat(percentage) >= 70 ? 'text-green-600' : 
-                          parseFloat(percentage) >= 40 ? 'text-yellow-600' : 'text-red-600'
-                        }`}>{percentage}%</p>
-                        <p className="text-gray-600">{a.score}/{a.total} correct</p>
+                        <p className={`text-3xl font-bold ${getScoreColor(percentage)}`}>
+                          {percentage}%
+                        </p>
+                        <p className="text-gray-600">
+                          {a.totalScore}/{a.totalMaxScore} marks
+                        </p>
                       </div>
                     </div>
 
-                    <div className="border-t pt-4">
-                      <div className="mb-4 p-4 bg-blue-50 rounded-lg">
-                        <button 
-                          type="button"
-                          className="w-full text-left font-medium text-blue-900 flex items-center justify-between hover:text-blue-700"
-                          onClick={(e) => {
-                            const parent = (e.target as HTMLElement).closest('.answer-section');
-                            if (parent) {
-                              const details = parent.querySelector('.answer-details');
-                              if (details) {
-                                details.classList.toggle('hidden');
-                              }
-                            }
-                          }}
-                        >
-                          <span>📋 View Answers & Explanations ({order.length} questions)</span>
-                          <ChevronDown className="w-5 h-5" />
-                        </button>
+                    {/* Section-wise score summary */}
+                    {sectionResults.length > 0 && (
+                      <div className="grid grid-cols-3 gap-3 mb-4">
+                        {sectionResults.map((sr) => {
+                          const sectionPct = sr.maxScore > 0
+                            ? Math.round((sr.score / sr.maxScore) * 100)
+                            : 0;
+
+                          return (
+                            <div
+                              key={sr.subject}
+                              className={`border rounded-lg p-3 ${getSectionBorderColor(sr.subject)}`}
+                            >
+                              <h4 className={`font-semibold capitalize text-sm ${getSectionHeaderColor(sr.subject)}`}>
+                                {sr.subject}
+                              </h4>
+                              <p className={`text-lg font-bold ${getScoreColor(sectionPct)}`}>
+                                {sr.score}/{sr.maxScore}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {sr.questions?.length || 0}Q × {sr.marksPerQuestion}m | {sectionPct}%
+                              </p>
+                            </div>
+                          );
+                        })}
                       </div>
+                    )}
 
-                      <div className="answer-section">
-                        <div className="answer-details hidden space-y-4 max-h-96 overflow-y-auto">
-                          {order.map((originalIdx, shuffledIdx) => {
-                            const q = test.questions[originalIdx];
-                            const userAnswer = a.answers[shuffledIdx];
-                            const isCorrect = userAnswer === q.correct;
+                    {/* View Answers & Explanations toggle */}
+                    <div className="border-t pt-4">
+                      <button
+                        type="button"
+                        onClick={() => toggleAttempt(a._id)}
+                        className="w-full p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition"
+                      >
+                        <div className="flex items-center justify-between text-blue-900 font-medium">
+                          <span>📋 View Answers & Explanations</span>
+                          {isExpanded
+                            ? <ChevronUp className="w-5 h-5" />
+                            : <ChevronDown className="w-5 h-5" />
+                          }
+                        </div>
+                      </button>
 
-                            return (
-                              <div 
-                                key={shuffledIdx} 
-                                className={`p-4 rounded-lg border-2 ${
-                                  isCorrect 
-                                    ? 'border-green-300 bg-green-50' 
-                                    : 'border-red-300 bg-red-50'
-                                }`}
-                              >
-                                <div className="flex items-start justify-between mb-3">
-                                  <p className="font-bold text-gray-900">Q{shuffledIdx + 1}. {q.question}</p>
-                                  <span className={`px-2 py-1 rounded text-xs font-bold whitespace-nowrap ml-2 ${
-                                    isCorrect ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'
-                                  }`}>
-                                    {isCorrect ? '✓ Correct' : '✗ Incorrect'}
-                                  </span>
+                      {isExpanded && sectionResults.length > 0 && (
+                        <div className="mt-4">
+                          {/* Section tabs */}
+                          <div className="flex border-b mb-4">
+                         {sectionResults.map((sr) => (
+  <button
+    key={sr.subject}
+    onClick={() => setExpandedSection(sr.subject)}
+    className={`px-5 py-3 font-medium text-sm transition-colors capitalize ${
+      expandedSection === sr.subject
+        ? `border-b-2 border-indigo-600 text-indigo-700`
+        : 'text-gray-500 hover:text-gray-700'
+    }`}
+  >
+    {sr.subject} ({sr.score}/{sr.maxScore})
+  </button>
+))}
+                          </div>
+
+                          {/* Questions for the active section */}
+                          {sectionResults
+                            .filter(sr => sr.subject === expandedSection)
+                            .map(sr => (
+                              <div key={sr.subject} className="space-y-4 max-h-[600px] overflow-y-auto">
+                                {/* Section header */}
+                                <div className={`p-3 rounded-lg border ${getSectionBorderColor(sr.subject)}`}>
+                                  <p className={`font-semibold capitalize ${getSectionHeaderColor(sr.subject)}`}>
+                                    {sr.subject} — {sr.score}/{sr.maxScore} marks
+                                    <span className="font-normal text-sm ml-2">
+                                      ({sr.marksPerQuestion} mark{sr.marksPerQuestion > 1 ? 's' : ''} per question)
+                                    </span>
+                                  </p>
                                 </div>
 
-                                {q.questionImage && (
-                                  <img 
-                                    src={q.questionImage} 
-                                    alt="Question" 
-                                    className="h-40 mb-3 rounded border border-gray-300" 
-                                  />
-                                )}
-                                
-                                <div className="space-y-2 mb-3">
-                                  <p className="text-xs font-semibold text-gray-700 uppercase">Answer Options:</p>
-                                  {q.options.map((opt, idx) => {
-                                    const isUserAnswer = idx === userAnswer;
-                                    const isCorrectAnswer = idx === q.correct;
-
-                                    return (
-                                      <div 
-                                        key={idx} 
-                                        className={`p-3 rounded border-l-4 ${
-                                          isCorrectAnswer
-                                            ? 'border-l-green-600 bg-green-100 border border-green-300'
-                                            : isUserAnswer && !isCorrectAnswer
-                                            ? 'border-l-red-600 bg-red-100 border border-red-300'
-                                            : 'border-l-gray-400 bg-gray-100 border border-gray-300'
+                                {sr.questions?.map((q, qIdx) => (
+                                  <div
+                                    key={qIdx}
+                                    className={`p-5 rounded-lg border-2 ${
+                                      q.isCorrect
+                                        ? 'border-green-400 bg-green-50'
+                                        : q.studentAnswer === null || q.studentAnswer === undefined
+                                        ? 'border-orange-300 bg-orange-50'
+                                        : 'border-red-400 bg-red-50'
+                                    }`}
+                                  >
+                                    {/* Question header */}
+                                    <div className="flex items-start justify-between mb-3">
+                                      <p className="font-bold text-gray-900 flex-1">
+                                        Q{qIdx + 1}. {q.question}
+                                      </p>
+                                      <span
+                                        className={`px-3 py-1 rounded text-sm font-bold whitespace-nowrap ml-2 ${
+                                          q.isCorrect
+                                            ? 'bg-green-200 text-green-900'
+                                            : q.studentAnswer === null || q.studentAnswer === undefined
+                                            ? 'bg-orange-200 text-orange-900'
+                                            : 'bg-red-200 text-red-900'
                                         }`}
                                       >
-                                        <div className="flex items-start gap-3">
-                                          <span className="font-bold text-gray-700 w-6">{String.fromCharCode(65 + idx)})</span>
-                                          <div className="flex-1">
-                                            <p className="text-gray-800">{opt}</p>
-                                            {q.optionImages?.[idx] && (
-                                              <img 
-                                                src={q.optionImages[idx]} 
-                                                alt={`Option ${String.fromCharCode(65 + idx)}`} 
-                                                className="h-24 mt-2 rounded border border-gray-400" 
-                                              />
-                                            )}
-                                          </div>
-                                          <div className="flex gap-1">
-                                            {isCorrectAnswer && (
-                                              <span className="px-2 py-1 bg-green-600 text-white rounded text-xs font-bold">
-                                                Correct
-                                              </span>
-                                            )}
-                                            {isUserAnswer && !isCorrectAnswer && (
-                                              <span className="px-2 py-1 bg-red-600 text-white rounded text-xs font-bold">
-                                                Your Answer
-                                              </span>
-                                            )}
-                                            {isUserAnswer && isCorrectAnswer && (
-                                              <span className="px-2 py-1 bg-green-600 text-white rounded text-xs font-bold">
-                                                Your Answer ✓
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                        {q.isCorrect
+                                          ? `✓ Correct +${q.marksAwarded}`
+                                          : q.studentAnswer === null || q.studentAnswer === undefined
+                                          ? '⚠ Not Attempted'
+                                          : '✗ Incorrect'
+                                        }
+                                        <span className="ml-1 text-xs">
+                                          ({q.marksAwarded}/{q.marksPerQuestion})
+                                        </span>
+                                      </span>
+                                    </div>
 
-                                {q.explanation && (
-                                  <div className="mt-3 p-3 bg-blue-100 rounded-lg border border-blue-300">
-                                    <p className="text-sm font-bold text-blue-900 mb-1">💡 Explanation:</p>
-                                    <p className="text-sm text-blue-900">{q.explanation}</p>
+                                    {/* Options */}
+                                    <div className="space-y-2 mb-4">
+                                      {q.options?.map((opt, optIdx) => {
+                                        const isStudentAnswer = optIdx === q.studentAnswer;
+                                        const isCorrectAnswer = optIdx === q.correctAnswer;
+                                        const isWrongStudentAnswer = isStudentAnswer && !q.isCorrect;
+
+                                        let borderStyle = 'bg-gray-50 border-gray-200';
+                                        if (isCorrectAnswer) {
+                                          borderStyle = 'bg-green-50 border-green-500';
+                                        }
+                                        if (isWrongStudentAnswer) {
+                                          borderStyle = 'bg-red-50 border-red-500';
+                                        }
+
+                                        return (
+                                          <div
+                                            key={optIdx}
+                                            className={`p-3 rounded-lg border-2 ${borderStyle}`}
+                                          >
+                                            <div className="flex items-start gap-3">
+                                              <span className="font-bold text-gray-800 min-w-[2rem]">
+                                                {String.fromCharCode(65 + optIdx)})
+                                              </span>
+                                              <p className="text-gray-900 flex-1">{opt}</p>
+                                              <div className="flex flex-col gap-1 items-end">
+                                                {isCorrectAnswer && (
+                                                  <span className="px-2 py-0.5 bg-green-600 text-white rounded-full text-xs font-bold">
+                                                    ✓ Correct Answer
+                                                  </span>
+                                                )}
+                                                {isStudentAnswer && isCorrectAnswer && (
+                                                  <span className="px-2 py-0.5 bg-green-700 text-white rounded-full text-xs font-bold">
+                                                    ✓ Your Answer
+                                                  </span>
+                                                )}
+                                                {isWrongStudentAnswer && (
+                                                  <span className="px-2 py-0.5 bg-red-600 text-white rounded-full text-xs font-bold">
+                                                    ✗ Your Answer
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+
+                                    {/* Summary line */}
+                                    <div className="text-xs text-gray-500 flex flex-wrap gap-4 mb-3">
+                                      <span>
+                                        Your answer:{' '}
+                                        <strong>
+                                          {q.studentAnswer !== null && q.studentAnswer !== undefined
+                                            ? String.fromCharCode(65 + q.studentAnswer)
+                                            : 'Not answered'}
+                                        </strong>
+                                      </span>
+                                      <span>
+                                        Correct answer:{' '}
+                                        <strong>{String.fromCharCode(65 + q.correctAnswer)}</strong>
+                                      </span>
+                                      <span>
+                                        Marks: <strong>{q.marksAwarded}/{q.marksPerQuestion}</strong>
+                                      </span>
+                                    </div>
+
+                                    {/* Explanation */}
+                                    {q.explanation && (
+                                      <div className="p-4 bg-blue-50 rounded-lg border-2 border-blue-300">
+                                        <p className="text-sm font-bold text-blue-900 mb-1">
+                                          💡 Explanation:
+                                        </p>
+                                        <p className="text-sm text-blue-900 leading-relaxed">
+                                          {q.explanation}
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    {/* No explanation notice */}
+                                    {!q.explanation && (
+                                      <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                        <p className="text-xs text-gray-400 italic">
+                                          No explanation provided for this question.
+                                        </p>
+                                      </div>
+                                    )}
                                   </div>
-                                )}
+                                ))}
                               </div>
-                            );
-                          })}
+                            ))
+                          }
                         </div>
-                      </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -274,6 +486,7 @@ const StudentView: React.FC<StudentViewProps> = ({
           </div>
         )}
 
+        {/* ======================== MATERIALS TAB ======================== */}
         {activeTab === 'materials' && (
           <div className="space-y-4">
             {availableMaterials.length === 0 ? (
@@ -283,17 +496,17 @@ const StudentView: React.FC<StudentViewProps> = ({
               </div>
             ) : (
               availableMaterials.map(m => (
-                <div key={m.id} className="bg-white rounded-lg shadow p-6">
+                <div key={m._id} className="bg-white rounded-lg shadow p-6">
                   <h3 className="text-xl font-bold mb-2">{m.title}</h3>
                   <p className="text-gray-600 mb-2">{m.subject} | {m.type}</p>
                   <div className="bg-gray-50 p-4 rounded-lg">
                     {m.type === 'notes' ? (
                       <p className="text-gray-700 whitespace-pre-wrap">{m.content}</p>
                     ) : (
-                      <a 
-                        href={m.content} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
+                      <a
+                        href={m.content}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="text-indigo-600 hover:underline"
                       >
                         Open {m.type}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Award, LogOut } from 'lucide-react'
-import type { User, Test, Course, Attempt } from '../types'
+import type { User, Test, Course, TestSubmission } from '../types'
 import { api } from '../api'
 
 interface AdminViewProps {
@@ -8,7 +8,7 @@ interface AdminViewProps {
   users: User[]
   tests: Test[]
   courses: Course[]
-  attempts: Attempt[]
+  attempts: TestSubmission[]
   onLogout: () => void
   onUsersUpdate: (users: User[]) => void
   onTestsUpdate: (tests: Test[]) => void
@@ -29,6 +29,7 @@ const AdminView: React.FC<AdminViewProps> = ({
   const [activeTab, setActiveTab] = useState('users')
   const [courseForm, setCourseForm] = useState({ name: '', description: '' })
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [expandedTest, setExpandedTest] = useState<string | null>(null)
   const [newUserForm, setNewUserForm] = useState({
     email: '',
     password: '',
@@ -40,6 +41,33 @@ const AdminView: React.FC<AdminViewProps> = ({
 
   const pendingUsers = users.filter((u) => !u.approved && u.role === 'teacher')
   const pendingTests = tests.filter((t) => !t.approved)
+
+  // Helper to get total question count from sections
+  const getTotalQuestions = (test: Test): number => {
+    if (!test.sections) return 0
+    return test.sections.reduce((sum, s) => sum + (s.questions?.length || 0), 0)
+  }
+
+  // Helper to get total marks from sections
+  const getTotalMarks = (test: Test): number => {
+    if (!test.sections) return 0
+    return test.sections.reduce((sum, s) => {
+      const marks = s.marksPerQuestion || (s.subject === 'maths' ? 2 : 1)
+      return sum + (s.questions?.length || 0) * marks
+    }, 0)
+  }
+
+  // Helper to get section question count
+  // const getSectionInfo = (test: Test, subject: string) => {
+  //   const section = test.sections?.find((s) => s.subject === subject)
+  //   if (!section) return { count: 0, marks: 0 }
+  //   const marks = section.marksPerQuestion || (subject === 'maths' ? 2 : 1)
+  //   return {
+  //     count: section.questions?.length || 0,
+  //     marks: (section.questions?.length || 0) * marks,
+  //     marksPerQ: marks,
+  //   }
+  // }
 
   const approveTeacher = async (id: string) => {
     setActionLoading(id)
@@ -99,6 +127,15 @@ const AdminView: React.FC<AdminViewProps> = ({
     }
   }
 
+  const getSectionBadgeColor = (subject: string) => {
+    switch (subject) {
+      case 'physics': return 'bg-blue-100 text-blue-800'
+      case 'chemistry': return 'bg-green-100 text-green-800'
+      case 'maths': return 'bg-purple-100 text-purple-800'
+      default: return 'bg-gray-100 text-gray-800'
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <nav className="bg-white shadow-sm border-b">
@@ -133,10 +170,21 @@ const AdminView: React.FC<AdminViewProps> = ({
               }`}
             >
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === 'users' && pendingUsers.length > 0 && (
+                <span className="ml-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
+                  {pendingUsers.length}
+                </span>
+              )}
+              {tab === 'tests' && pendingTests.length > 0 && (
+                <span className="ml-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
+                  {pendingTests.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
 
+        {/* ======================== USERS TAB ======================== */}
         {activeTab === 'users' && (
           <div className="space-y-6">
             <div className="bg-white rounded-lg shadow p-6">
@@ -150,7 +198,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                 <div className="space-y-3">
                   {pendingUsers.map((u) => (
                     <div
-                      key={u.id}
+                      key={u._id}
                       className="flex justify-between items-center p-4 border rounded-lg"
                     >
                       <div>
@@ -161,15 +209,15 @@ const AdminView: React.FC<AdminViewProps> = ({
                       </div>
                       <div className="flex gap-2">
                         <button
-                          disabled={actionLoading === u.id}
-                          onClick={() => approveTeacher(u.id)}
+                          disabled={actionLoading === u._id}
+                          onClick={() => approveTeacher(u._id)}
                           className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60"
                         >
-                          {actionLoading === u.id ? '...' : 'Approve'}
+                          {actionLoading === u._id ? '...' : 'Approve'}
                         </button>
                         <button
-                          disabled={actionLoading === u.id}
-                          onClick={() => rejectTeacher(u.id)}
+                          disabled={actionLoading === u._id}
+                          onClick={() => rejectTeacher(u._id)}
                           className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60"
                         >
                           Reject
@@ -189,46 +237,117 @@ const AdminView: React.FC<AdminViewProps> = ({
               <div className="mb-4 p-4 border rounded-lg bg-gray-50">
                 <h3 className="font-medium mb-2">Add User</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                  <input type="email" placeholder="Email" value={newUserForm.email} onChange={e => setNewUserForm({...newUserForm, email: e.target.value})} className="px-3 py-2 border rounded" />
-                  <input type="text" placeholder="Full name" value={newUserForm.name} onChange={e => setNewUserForm({...newUserForm, name: e.target.value})} className="px-3 py-2 border rounded" />
-                  <input type="password" placeholder="Password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="px-3 py-2 border rounded" />
-                  <select value={newUserForm.role} onChange={e => setNewUserForm({...newUserForm, role: e.target.value as any})} className="px-3 py-2 border rounded">
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={newUserForm.email}
+                    onChange={(e) =>
+                      setNewUserForm({ ...newUserForm, email: e.target.value })
+                    }
+                    className="px-3 py-2 border rounded"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Full name"
+                    value={newUserForm.name}
+                    onChange={(e) =>
+                      setNewUserForm({ ...newUserForm, name: e.target.value })
+                    }
+                    className="px-3 py-2 border rounded"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={newUserForm.password}
+                    onChange={(e) =>
+                      setNewUserForm({ ...newUserForm, password: e.target.value })
+                    }
+                    className="px-3 py-2 border rounded"
+                  />
+                  <select
+                    value={newUserForm.role}
+                    onChange={(e) =>
+                      setNewUserForm({
+                        ...newUserForm,
+                        role: e.target.value as any,
+                      })
+                    }
+                    className="px-3 py-2 border rounded"
+                  >
                     <option value="student">Student</option>
                     <option value="teacher">Teacher</option>
                     <option value="admin">Admin</option>
                   </select>
-                  <select value={newUserForm.course} onChange={e => setNewUserForm({...newUserForm, course: e.target.value})} className="px-3 py-2 border rounded">
+                  <select
+                    value={newUserForm.course}
+                    onChange={(e) =>
+                      setNewUserForm({ ...newUserForm, course: e.target.value })
+                    }
+                    className="px-3 py-2 border rounded"
+                  >
                     <option value="">Course (optional)</option>
-                    {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {courses.map((c) => (
+                      <option key={c._id} value={c._id}>
+                        {c.name}
+                      </option>
+                    ))}
                   </select>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={newUserForm.approved} onChange={e => setNewUserForm({...newUserForm, approved: e.target.checked})} />
+                    <input
+                      type="checkbox"
+                      checked={newUserForm.approved}
+                      onChange={(e) =>
+                        setNewUserForm({
+                          ...newUserForm,
+                          approved: e.target.checked,
+                        })
+                      }
+                    />
                     <span className="text-sm">Approved</span>
                   </label>
                 </div>
                 <div className="mt-3">
-                  <button onClick={async () => {
-                    try {
-                      const payload: any = { email: newUserForm.email, password: newUserForm.password, name: newUserForm.name, role: newUserForm.role };
-                      if (newUserForm.course) payload.course = newUserForm.course;
-                      payload.approved = newUserForm.approved;
-                      setActionLoading('create-user');
-                      await api('users', 'POST', payload);
-                      const usersData = await api('users');
-                      onUsersUpdate(usersData);
-                      setNewUserForm({ email: '', password: '', name: '', role: 'student', course: '', approved: false });
-                      alert('User created');
-                    } catch (error: any) {
-                      alert(error.message || 'Failed to create user');
-                    } finally { setActionLoading(null); }
-                  }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">{actionLoading === 'create-user' ? '...' : 'Create User'}</button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const payload: any = {
+                          email: newUserForm.email,
+                          password: newUserForm.password,
+                          name: newUserForm.name,
+                          role: newUserForm.role,
+                        }
+                        if (newUserForm.course) payload.course = newUserForm.course
+                        payload.approved = newUserForm.approved
+                        setActionLoading('create-user')
+                        await api('users', 'POST', payload)
+                        const usersData = await api('users')
+                        onUsersUpdate(usersData)
+                        setNewUserForm({
+                          email: '',
+                          password: '',
+                          name: '',
+                          role: 'student',
+                          course: '',
+                          approved: false,
+                        })
+                        alert('User created')
+                      } catch (error: any) {
+                        alert(error.message || 'Failed to create user')
+                      } finally {
+                        setActionLoading(null)
+                      }
+                    }}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg"
+                  >
+                    {actionLoading === 'create-user' ? '...' : 'Create User'}
+                  </button>
                 </div>
               </div>
 
               <div className="space-y-2">
                 {users.map((u) => (
                   <div
-                    key={u.id}
+                    key={u._id}
                     className="flex justify-between items-center p-3 border rounded"
                   >
                     <div>
@@ -248,20 +367,32 @@ const AdminView: React.FC<AdminViewProps> = ({
                         {u.approved ? 'Active' : 'Pending'}
                       </span>
                       {!u.approved && u.role !== 'admin' && (
-                        <button disabled={actionLoading === u.id} onClick={() => approveTeacher(u.id)} className="px-3 py-1 bg-green-600 text-white rounded">Approve</button>
+                        <button
+                          disabled={actionLoading === u._id}
+                          onClick={() => approveTeacher(u._id)}
+                          className="px-3 py-1 bg-green-600 text-white rounded"
+                        >
+                          Approve
+                        </button>
                       )}
-                      <button disabled={actionLoading === u.id} onClick={async () => {
-                        if (!confirm('Delete user?')) return;
-                        setActionLoading(u.id);
-                        try {
-                          await api(`users/${u.id}`, 'DELETE');
-                          const usersData = await api('users');
-                          onUsersUpdate(usersData);
-                        } catch (error: any) {
-                          alert(error.message || 'Failed to delete user');
-                        }
-                        setActionLoading(null);
-                      }} className="px-3 py-1 bg-red-600 text-white rounded">Delete</button>
+                      <button
+                        disabled={actionLoading === u._id}
+                        onClick={async () => {
+                          if (!confirm('Delete user?')) return
+                          setActionLoading(u._id)
+                          try {
+                            await api(`users/${u._id}`, 'DELETE')
+                            const usersData = await api('users')
+                            onUsersUpdate(usersData)
+                          } catch (error: any) {
+                            alert(error.message || 'Failed to delete user')
+                          }
+                          setActionLoading(null)
+                        }}
+                        className="px-3 py-1 bg-red-600 text-white rounded"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -270,57 +401,222 @@ const AdminView: React.FC<AdminViewProps> = ({
           </div>
         )}
 
+        {/* ======================== TESTS TAB ======================== */}
         {activeTab === 'tests' && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-bold mb-4">
-              Pending Test Approvals ({pendingTests.length})
-            </h2>
+          <div className="space-y-6">
+            {/* Pending Tests */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-bold mb-4">
+                Pending Test Approvals ({pendingTests.length})
+              </h2>
 
-            {pendingTests.length === 0 ? (
-              <p className="text-gray-500">No pending tests</p>
-            ) : (
-              <div className="space-y-3">
-                {pendingTests.map((t) => {
-                  const teacher = users.find((u) => u.id === t.teacherId)
+              {pendingTests.length === 0 ? (
+                <p className="text-gray-500">No pending tests</p>
+              ) : (
+                <div className="space-y-3">
+                  {pendingTests.map((t) => {
+                    const teacher = users.find((u) => u._id === t.teacherId)
+                    const isExpanded = expandedTest === t._id
+                    // const physics = getSectionInfo(t, 'physics')
+                    // const chemistry = getSectionInfo(t, 'chemistry')
+                    // const maths = getSectionInfo(t, 'maths')
 
-                  return (
-                    <div key={t.id} className="p-4 border rounded-lg">
-                      <div className="flex justify-between items-start mb-2">
+                    return (
+                      <div key={t._id} className="p-4 border rounded-lg">
+                        <div className="flex justify-between items-start mb-3">
+                          <div className="flex-1">
+                            <p className="font-bold text-lg">{t.title}</p>
+                            <p className="text-sm text-gray-600 mb-2">
+                              By: {teacher?.name || 'Unknown'} | Total Duration:{' '}
+                              {t.totalDuration || 180} min
+                            </p>
+
+                            {/* Section summary badges */}
+                            <div className="flex flex-wrap gap-2 mb-2">
+                              {t.sections?.map((section) => (
+                                <span
+                                  key={section.subject}
+                                  className={`px-3 py-1 rounded-full text-xs font-medium ${getSectionBadgeColor(
+                                    section.subject
+                                  )}`}
+                                >
+                                  {section.subject.charAt(0).toUpperCase() +
+                                    section.subject.slice(1)}
+                                  : {section.questions?.length || 0}Q ×{' '}
+                                  {section.marksPerQuestion || (section.subject === 'maths' ? 2 : 1)}
+                                  m
+                                </span>
+                              ))}
+                            </div>
+
+                            {/* Timing info */}
+                            <div className="text-xs text-gray-500">
+                              <span className="mr-3">
+                                ⏱ Physics + Chemistry: {t.sectionTimings?.physicsChemistry || 90}{' '}
+                                min (combined)
+                              </span>
+                              <span className="mr-3">
+                                ⏱ Maths: {t.sectionTimings?.maths || 90} min
+                              </span>
+                              <span>
+                                📊 Total: {getTotalQuestions(t)} questions |{' '}
+                                {getTotalMarks(t)} marks
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 ml-4">
+                            <button
+                              onClick={() =>
+                                setExpandedTest(isExpanded ? null : t._id)
+                              }
+                              className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm"
+                            >
+                              {isExpanded ? 'Hide' : 'Preview'}
+                            </button>
+                            <button
+                              disabled={actionLoading === t._id}
+                              onClick={() => approveTest(t._id)}
+                              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60"
+                            >
+                              {actionLoading === t._id ? '...' : 'Approve'}
+                            </button>
+                            <button
+                              disabled={actionLoading === t._id}
+                              onClick={() => rejectTest(t._id)}
+                              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Expanded preview of all sections */}
+                        {isExpanded && (
+                          <div className="mt-4 border-t pt-4">
+                            {t.sections?.map((section) => (
+                              <div key={section.subject} className="mb-4">
+                                <h4
+                                  className={`font-semibold text-sm uppercase tracking-wide mb-2 ${
+                                    section.subject === 'physics'
+                                      ? 'text-blue-700'
+                                      : section.subject === 'chemistry'
+                                      ? 'text-green-700'
+                                      : 'text-purple-700'
+                                  }`}
+                                >
+                                  {section.subject} ({section.questions?.length || 0}{' '}
+                                  questions,{' '}
+                                  {section.marksPerQuestion ||
+                                    (section.subject === 'maths' ? 2 : 1)}{' '}
+                                  mark{(section.marksPerQuestion || 1) > 1 ? 's' : ''}/question)
+                                </h4>
+                                <div className="space-y-2 pl-4">
+                                  {section.questions?.map((q, qIdx) => (
+                                    <div
+                                      key={qIdx}
+                                      className="text-sm border-l-2 border-gray-200 pl-3 py-1"
+                                    >
+                                      <p className="font-medium text-gray-800">
+                                        Q{qIdx + 1}. {q.question}
+                                      </p>
+                                      <div className="flex flex-wrap gap-3 mt-1 text-gray-600">
+                                        {q.options?.map((opt, optIdx) => (
+                                          <span
+                                            key={optIdx}
+                                            className={`${
+                                              optIdx === q.correct
+                                                ? 'text-green-700 font-semibold'
+                                                : ''
+                                            }`}
+                                          >
+                                            {String.fromCharCode(65 + optIdx)}. {opt}
+                                            {optIdx === q.correct && ' ✓'}
+                                          </span>
+                                        ))}
+                                      </div>
+                                      {q.explanation && (
+                                        <p className="text-xs text-blue-600 mt-1">
+                                          💡 {q.explanation}
+                                        </p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* All Tests */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-bold mb-4">All Tests ({tests.length})</h2>
+              {tests.length === 0 ? (
+                <p className="text-gray-500">No tests created yet</p>
+              ) : (
+                <div className="space-y-2">
+                  {tests.map((t) => {
+                    const teacher = users.find((u) => u._id === t.teacherId)
+                    return (
+                      <div
+                        key={t._id}
+                        className="flex justify-between items-center p-3 border rounded"
+                      >
                         <div>
-                          <p className="font-bold text-lg">{t.title}</p>
-                          <p className="text-sm text-gray-600">
-                            By: {teacher?.name || 'Unknown'} | Subject: {t.subject} | Duration:{" "}
-                            {t.duration} min
-                          </p>
-                          <p className="text-sm text-gray-500 mt-1">
-                            {t.questions.length} questions
+                          <p className="font-medium">{t.title}</p>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {t.sections?.map((s) => (
+                              <span
+                                key={s.subject}
+                                className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(
+                                  s.subject
+                                )}`}
+                              >
+                                {s.subject}: {s.questions?.length || 0}Q
+                              </span>
+                            ))}
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            By: {teacher?.name || 'Unknown'} | {getTotalMarks(t)} marks |{' '}
+                            {t.totalDuration || 180} min
                           </p>
                         </div>
-                        <div className="flex gap-2">
-                          <button
-                            disabled={actionLoading === t.id}
-                            onClick={() => approveTest(t.id)}
-                            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60"
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-3 py-1 rounded text-xs font-medium ${
+                              t.approved
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }`}
                           >
-                            {actionLoading === t.id ? '...' : 'Approve'}
-                          </button>
-                          <button
-                            disabled={actionLoading === t.id}
-                            onClick={() => rejectTest(t.id)}
-                            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60"
+                            {t.approved ? 'Approved' : 'Pending'}
+                          </span>
+                          <span
+                            className={`px-3 py-1 rounded text-xs font-medium ${
+                              t.active
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-gray-100 text-gray-600'
+                            }`}
                           >
-                            Reject
-                          </button>
+                            {t.active ? 'Active' : 'Inactive'}
+                          </span>
                         </div>
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
+        {/* ======================== COURSES TAB ======================== */}
         {activeTab === 'courses' && (
           <div className="bg-white rounded-lg shadow p-6">
             <h2 className="text-xl font-bold mb-4">Manage Courses</h2>
@@ -364,31 +660,105 @@ const AdminView: React.FC<AdminViewProps> = ({
 
             <div className="space-y-2">
               {courses.map((c) => (
-                <div key={c.id} className="p-4 border rounded-lg">
-                  <p className="font-bold">{c.name}</p>
-                  <p className="text-sm text-gray-600">{c.description}</p>
+                <div key={c._id} className="p-4 border rounded-lg flex justify-between items-center">
+                  <div>
+                    <p className="font-bold">{c.name}</p>
+                  </div>
+                  <span className="text-sm text-gray-500">
+                    {tests.filter((t) => t.course === c._id).length} tests
+                  </span>
                 </div>
               ))}
             </div>
           </div>
         )}
 
+        {/* ======================== ANALYTICS TAB ======================== */}
         {activeTab === 'analytics' && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="w-12 h-12 text-indigo-600 mb-3 text-2xl">👥</div>
-              <p className="text-3xl font-bold">{users.length}</p>
-              <p className="text-gray-600">Total Users</p>
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="text-2xl mb-3">👥</div>
+                <p className="text-3xl font-bold">{users.length}</p>
+                <p className="text-gray-600">Total Users</p>
+                <div className="mt-2 text-xs text-gray-500">
+                  {users.filter((u) => u.role === 'student').length} students |{' '}
+                  {users.filter((u) => u.role === 'teacher').length} teachers
+                </div>
+              </div>
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="text-2xl mb-3">📝</div>
+                <p className="text-3xl font-bold">{tests.length}</p>
+                <p className="text-gray-600">Total Tests</p>
+                <div className="mt-2 text-xs text-gray-500">
+                  {tests.filter((t) => t.approved).length} approved |{' '}
+                  {pendingTests.length} pending
+                </div>
+              </div>
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="text-2xl mb-3">📚</div>
+                <p className="text-3xl font-bold">{attempts.length}</p>
+                <p className="text-gray-600">Test Submissions</p>
+              </div>
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="text-2xl mb-3">🎓</div>
+                <p className="text-3xl font-bold">{courses.length}</p>
+                <p className="text-gray-600">Courses</p>
+              </div>
             </div>
+
+            {/* Test-wise stats */}
             <div className="bg-white rounded-lg shadow p-6">
-              <div className="w-12 h-12 text-green-600 mb-3 text-2xl">📝</div>
-              <p className="text-3xl font-bold">{tests.length}</p>
-              <p className="text-gray-600">Total Tests</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="w-12 h-12 text-blue-600 mb-3 text-2xl">📚</div>
-              <p className="text-3xl font-bold">{attempts.length}</p>
-              <p className="text-gray-600">Test Attempts</p>
+              <h3 className="text-lg font-bold mb-4">Test Statistics</h3>
+              {tests.filter((t) => t.approved).length === 0 ? (
+                <p className="text-gray-500">No approved tests yet</p>
+              ) : (
+                <div className="space-y-3">
+                  {tests
+                    .filter((t) => t.approved)
+                    .map((t) => {
+                      const testAttempts = attempts.filter(
+                        (a) =>
+                          (typeof a.testId === 'string' ? a.testId : a.testId?._id) === t._id
+                      )
+                      const avgScore =
+                        testAttempts.length > 0
+                          ? Math.round(
+                              testAttempts.reduce((sum, a) => sum + (a.percentage || 0), 0) /
+                                testAttempts.length
+                            )
+                          : 0
+
+                      return (
+                        <div key={t._id} className="p-3 border rounded flex justify-between items-center">
+                          <div>
+                            <p className="font-medium">{t.title}</p>
+                            <div className="flex gap-1 mt-1">
+                              {t.sections?.map((s) => (
+                                <span
+                                  key={s.subject}
+                                  className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(
+                                    s.subject
+                                  )}`}
+                                >
+                                  {s.subject}: {s.questions?.length || 0}Q
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium">
+                              {testAttempts.length} attempt{testAttempts.length !== 1 ? 's' : ''}
+                            </p>
+                            {testAttempts.length > 0 && (
+                              <p className="text-xs text-gray-500">Avg: {avgScore}%</p>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                </div>
+              )}
             </div>
           </div>
         )}

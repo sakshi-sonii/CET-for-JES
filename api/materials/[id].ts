@@ -20,6 +20,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { id } = req.query;
 
+    // Validate that id is a valid ObjectId to avoid cast errors
+    if (!id || typeof id !== "string" || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: "Invalid material ID" });
+    }
+
     // ======================
     // GET /api/materials/:id
     // ======================
@@ -45,6 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ message: "Material not found" });
       }
 
+      // Fix: Use string comparison safely for ownership check
       if (
         currentUser.role !== "admin" &&
         material.teacherId.toString() !== currentUser._id.toString()
@@ -73,6 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ message: "Material not found" });
       }
 
+      // Fix: Use string comparison safely for ownership check
       if (
         currentUser.role !== "admin" &&
         material.teacherId.toString() !== currentUser._id.toString()

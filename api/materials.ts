@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { connectDB, Material, getUserFromRequest } from "./_db.js";
+import mongoose from "mongoose";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -29,12 +30,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       if (currentUser.role === "teacher") {
-        query.teacherId = currentUser._id;
+        // Fix: Ensure proper ObjectId comparison for teacherId
+        const teacherObjectId = new mongoose.Types.ObjectId(currentUser._id.toString());
+        query.teacherId = teacherObjectId;
       }
+
+      // admin sees all — no filter applied
 
       const materials = await Material.find(query)
         .populate("course", "name")
-        // ❌ DO NOT populate teacherId here
         .sort({ createdAt: -1 });
 
       return res.status(200).json(materials);
@@ -68,7 +72,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         subject,
         content,
         type,
-        teacherId: currentUser._id,
+        // Fix: Store teacherId as a proper ObjectId
+        teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
       });
 
       return res.status(201).json(material);

@@ -20,6 +20,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const id = req.query.id as string;
 
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: "Invalid test ID" });
+    }
+
     // GET /api/tests/:id - Get single test
     if (req.method === "GET") {
       const test = await Test.findById(id);
@@ -50,9 +54,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ message: "Test not found" });
       }
 
-      const { active, title, subject, duration, questions } = req.body;
+      const { active, title, sections, sectionTimings } = req.body;
 
-      // Teachers can only update their own tests (active status)
+      // Teachers can only update their own tests
       if (currentUser.role === "teacher") {
         if (test.teacherId.toString() !== currentUser._id.toString()) {
           return res.status(403).json({ message: "Access denied" });
@@ -62,14 +66,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (active !== undefined && test.approved) {
           test.active = active;
         }
+
+        // Teachers can update sections if test is not yet approved
+        if (!test.approved) {
+          if (title) test.title = title;
+          if (sections && Array.isArray(sections)) {
+            test.sections = sections.map((section: any) => ({
+              subject: section.subject.toLowerCase(),
+              marksPerQuestion: section.subject.toLowerCase() === "maths" ? 2 : 1,
+              questions: section.questions.map((q: any) => ({
+                question: q.question,
+                options: q.options,
+                correct: q.correct,
+                explanation: q.explanation || "",
+              })),
+            }));
+          }
+          if (sectionTimings) {
+            test.sectionTimings = sectionTimings;
+          }
+        }
       }
       // Admin can update any test
       else if (currentUser.role === "admin") {
         if (active !== undefined) test.active = active;
         if (title) test.title = title;
-        if (subject) test.subject = subject;
-        if (duration) test.duration = duration;
-        if (questions) test.questions = questions;
+        if (sections && Array.isArray(sections)) {
+          test.sections = sections.map((section: any) => ({
+            subject: section.subject.toLowerCase(),
+            marksPerQuestion: section.subject.toLowerCase() === "maths" ? 2 : 1,
+            questions: section.questions.map((q: any) => ({
+              question: q.question,
+              options: q.options,
+              correct: q.correct,
+              explanation: q.explanation || "",
+            })),
+          }));
+        }
+        if (sectionTimings) {
+          test.sectionTimings = sectionTimings;
+        }
       } else {
         return res.status(403).json({ message: "Access denied" });
       }

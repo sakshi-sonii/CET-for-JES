@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { connectDB, Test, getUserFromRequest } from "./_db.js";
+import mongoose from "mongoose";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -20,7 +21,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // GET /api/tests - Get all tests
     if (req.method === "GET") {
-      let query = {};
+      let query: any = {};
 
       // Students can only see approved and active tests for their course
       if (currentUser.role === "student") {
@@ -32,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       // Teachers can see their own tests
       else if (currentUser.role === "teacher") {
-        query = { teacherId: currentUser._id };
+        query = { teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()) };
       }
       // Admin can see all tests
 
@@ -50,26 +51,79 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(403).json({ message: "Your account is not approved yet" });
       }
 
-      const { title, course, subject, duration, questions } = req.body;
+      const { title, course, sections } = req.body;
 
-      if (!title || !course || !subject || !duration || !questions || questions.length === 0) {
-        return res.status(400).json({ message: "All fields are required" });
+      if (!title || !course || !sections || !Array.isArray(sections) || sections.length === 0) {
+        return res.status(400).json({ message: "Title, course, and sections are required" });
       }
 
-      // Validate questions
-      for (const q of questions) {
-        if (!q.question || !q.options || q.options.length < 2 || q.correct === undefined) {
-          return res.status(400).json({ message: "Invalid question format" });
+      // Validate sections
+      const validSubjects = ["physics", "chemistry", "maths"];
+      const providedSubjects: string[] = [];
+
+      for (const section of sections) {
+        if (!section.subject || !validSubjects.includes(section.subject.toLowerCase())) {
+          return res.status(400).json({
+            message: `Invalid section subject: "${section.subject}". Must be one of: ${validSubjects.join(", ")}`,
+          });
+        }
+
+        if (providedSubjects.includes(section.subject.toLowerCase())) {
+          return res.status(400).json({
+            message: `Duplicate section: ${section.subject}. Each subject can only appear once.`,
+          });
+        }
+        providedSubjects.push(section.subject.toLowerCase());
+
+        if (!section.questions || !Array.isArray(section.questions) || section.questions.length === 0) {
+          return res.status(400).json({
+            message: `Section "${section.subject}" must have at least one question`,
+          });
+        }
+
+        // Validate each question
+        for (let i = 0; i < section.questions.length; i++) {
+          const q = section.questions[i];
+          if (!q.question || !q.options || q.options.length < 2 || q.correct === undefined) {
+            return res.status(400).json({
+              message: `Invalid question format at question ${i + 1} in section "${section.subject}". Required: question, options (min 2), correct`,
+            });
+          }
         }
       }
+
+      // Ensure all 3 sections are present
+      for (const subj of validSubjects) {
+        if (!providedSubjects.includes(subj)) {
+          return res.status(400).json({
+            message: `Missing required section: ${subj}. All three sections (physics, chemistry, maths) are required.`,
+          });
+        }
+      }
+
+      // Build sections with proper marksPerQuestion
+      const processedSections = sections.map((section: any) => ({
+        subject: section.subject.toLowerCase(),
+        marksPerQuestion: section.subject.toLowerCase() === "maths" ? 2 : 1,
+        questions: section.questions.map((q: any) => ({
+          question: q.question,
+          options: q.options,
+          correct: q.correct,
+          explanation: q.explanation || "",
+        })),
+      }));
 
       const test = await Test.create({
         title,
         course,
-        subject,
-        duration,
-        questions,
-        teacherId: currentUser._id,
+        sections: processedSections,
+        // Section timing: Physics+Chemistry = 90 min combined, Maths = 90 min
+        sectionTimings: {
+          physicsChemistry: 90,
+          maths: 90,
+        },
+        totalDuration: 180,
+        teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
         approved: false,
         active: false,
       });
