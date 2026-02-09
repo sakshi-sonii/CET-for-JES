@@ -51,12 +51,28 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
 
-  const myTests = tests.filter(t => t.teacherId === user!.id);
-  const isMyMaterial = (m: Material) =>
-  (typeof m.teacherId === 'string'
-    ? m.teacherId
-    : (m.teacherId as any)?.$oid) === user!.id;
-
+  // Fixed: Handle both string and ObjectId comparison for tests
+  const myTests = tests.filter(t => {
+    const testTeacherId = typeof t.teacherId === 'string' 
+      ? t.teacherId 
+      : String(t.teacherId);
+    const currentUserId = typeof user!.id === 'string' 
+      ? user!.id 
+      : String(user!.id);
+    return testTeacherId === currentUserId;
+  });
+  
+  // Fixed: Handle both string and ObjectId comparison for materials
+  const isMyMaterial = (m: Material) => {
+    // Convert both to strings for comparison to handle ObjectId
+    const materialTeacherId = typeof m.teacherId === 'string' 
+      ? m.teacherId 
+      : String(m.teacherId);
+    const currentUserId = typeof user!.id === 'string' 
+      ? user!.id 
+      : String(user!.id);
+    return materialTeacherId === currentUserId;
+  };
 
   const addQuestion = () => {
     if (questionForm.question && questionForm.options.every(o => o)) {
@@ -779,8 +795,7 @@ Explanation: Optional explanation</pre>
                     <div key={m.id} className="p-4 border rounded-lg">
                       <p className="font-medium">{m.title}</p>
                       <p className="text-sm text-gray-600">{m.subject} | {m.type}</p>
-                      <p className="text-xs text-gray-500 mt-1">Course: {courses.find(c => c.id === (typeof m.course === 'string' ? m.course : (m.course as any)?.$oid))?.name
- || m.course}</p>
+                      <p className="text-xs text-gray-500 mt-1">Course: {courses.find(c => c.id === m.course)?.name || m.course}</p>
                     </div>
                   ))
                 )}
