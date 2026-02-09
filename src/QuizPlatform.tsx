@@ -56,22 +56,15 @@ const QuizPlatform: React.FC = () => {
     if (!user) return;
 
     try {
-      const [testsData, materialsData] = await Promise.all([
+      const [testsData, materialsData, attemptsData] = await Promise.all([
         api("tests"),
         api("materials"),
+        api("attempts"),
       ]);
 
       setTests(testsData);
       setMaterials(materialsData);
-
-      // Fetch test submissions
-      try {
-        const submissionsData = await api("test-submissions");
-        setAttempts(Array.isArray(submissionsData) ? submissionsData : []);
-      } catch (err) {
-        console.warn("Could not fetch test submissions:", err);
-        setAttempts([]);
-      }
+      setAttempts(Array.isArray(attemptsData) ? attemptsData : []);
 
       // Admin also needs users list
       if (user.role === 'admin') {
@@ -94,7 +87,7 @@ const QuizPlatform: React.FC = () => {
     if (!currentTest || !user) return;
 
     try {
-      const res = await api("test-submissions", "POST", {
+      const res = await api("attempts", "POST", {
         testId: currentTest._id,
         answers: testAnswers,
       });
@@ -105,17 +98,15 @@ const QuizPlatform: React.FC = () => {
 
       alert(`Test submitted! Score: ${totalScore}/${totalMaxScore} (${percentage}%)`);
 
-      // Clear test state
+      // Clear test state and redirect to results
       setCurrentTest(null);
-
-      // Redirect to results tab
       setStudentActiveTab('results');
       setView('student');
 
-      // Refresh submissions so results show immediately
+      // Refresh submissions
       try {
-        const submissionsData = await api("test-submissions");
-        setAttempts(Array.isArray(submissionsData) ? submissionsData : []);
+        const attemptsData = await api("attempts");
+        setAttempts(Array.isArray(attemptsData) ? attemptsData : []);
       } catch {
         console.warn("Could not refresh submissions");
       }
