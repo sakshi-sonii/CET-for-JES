@@ -52,7 +52,11 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const [uploadingFile, setUploadingFile] = useState(false);
 
   const myTests = tests.filter(t => t.teacherId === user!.id);
-  const isMyMaterial = (m: Material) => m.teacherId === user!.id;
+  const isMyMaterial = (m: Material) =>
+  (typeof m.teacherId === 'string'
+    ? m.teacherId
+    : (m.teacherId as any)?.$oid) === user!.id;
+
 
   const addQuestion = () => {
     if (questionForm.question && questionForm.options.every(o => o)) {
@@ -775,7 +779,8 @@ Explanation: Optional explanation</pre>
                     <div key={m.id} className="p-4 border rounded-lg">
                       <p className="font-medium">{m.title}</p>
                       <p className="text-sm text-gray-600">{m.subject} | {m.type}</p>
-                      <p className="text-xs text-gray-500 mt-1">Course: {courses.find(c => c.id === m.course)?.name || m.course}</p>
+                      <p className="text-xs text-gray-500 mt-1">Course: {courses.find(c => c.id === (typeof m.course === 'string' ? m.course : (m.course as any)?.$oid))?.name
+ || m.course}</p>
                     </div>
                   ))
                 )}
