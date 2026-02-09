@@ -20,7 +20,7 @@ const QuizPlatform: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [studentActiveTab, setStudentActiveTab] = useState<string>('tests');
 
-  // Fetch courses on mount (needed for login/register)
+  // Fetch courses on mount
   useEffect(() => {
     api("courses").then(setCourses).catch(console.error);
   }, []);
@@ -64,21 +64,16 @@ const QuizPlatform: React.FC = () => {
       setTests(testsData);
       setMaterials(materialsData);
 
-      // Fetch attempts/submissions
+      // Fetch test submissions
       try {
-        const attemptsData = await api("test-submissions");
-        setAttempts(attemptsData);
-      } catch {
-        // Fallback: try old endpoint
-        try {
-          const attemptsData = await api("attempts");
-          setAttempts(attemptsData);
-        } catch {
-          console.warn("Could not fetch attempts");
-          setAttempts([]);
-        }
+        const submissionsData = await api("test-submissions");
+        setAttempts(Array.isArray(submissionsData) ? submissionsData : []);
+      } catch (err) {
+        console.warn("Could not fetch test submissions:", err);
+        setAttempts([]);
       }
 
+      // Admin also needs users list
       if (user.role === 'admin') {
         const usersData = await api("users");
         setUsers(usersData);
@@ -93,7 +88,7 @@ const QuizPlatform: React.FC = () => {
   }, [fetchData]);
 
   // ========================
-  // Submit test (called by TakingTestView)
+  // Submit test — called by TakingTestView
   // ========================
   const handleTestSubmit = async (testAnswers: Record<string, number>) => {
     if (!currentTest || !user) return;
@@ -110,21 +105,19 @@ const QuizPlatform: React.FC = () => {
 
       alert(`Test submitted! Score: ${totalScore}/${totalMaxScore} (${percentage}%)`);
 
+      // Clear test state
       setCurrentTest(null);
-      setStudentActiveTab('results');
-      setView("student");
 
-      // Refresh attempts
+      // Redirect to results tab
+      setStudentActiveTab('results');
+      setView('student');
+
+      // Refresh submissions so results show immediately
       try {
-        const attemptsData = await api("test-submissions");
-        setAttempts(attemptsData);
+        const submissionsData = await api("test-submissions");
+        setAttempts(Array.isArray(submissionsData) ? submissionsData : []);
       } catch {
-        try {
-          const attemptsData = await api("attempts");
-          setAttempts(attemptsData);
-        } catch {
-          console.warn("Could not refresh attempts");
-        }
+        console.warn("Could not refresh submissions");
       }
     } catch (error: any) {
       alert(error.message || "Failed to submit test");
@@ -141,8 +134,12 @@ const QuizPlatform: React.FC = () => {
     setTests([]);
     setAttempts([]);
     setMaterials([]);
+    setCourses([]);
     setView('login');
     setCurrentTest(null);
+
+    // Re-fetch courses for login page
+    api("courses").then(setCourses).catch(console.error);
   };
 
   // ========================
@@ -154,7 +151,7 @@ const QuizPlatform: React.FC = () => {
   };
 
   // ========================
-  // Loading screen
+  // Loading
   // ========================
   if (loading) {
     return (
@@ -168,7 +165,7 @@ const QuizPlatform: React.FC = () => {
   }
 
   // ========================
-  // Render views
+  // Render
   // ========================
   return (
     <>
