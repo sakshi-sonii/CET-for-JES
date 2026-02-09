@@ -18,30 +18,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    // GET /api/materials - Get materials
+    // ======================
+    // GET /api/materials
+    // ======================
     if (req.method === "GET") {
-      let query = {};
+      let query: any = {};
 
-      // Students and Teachers can see materials for their course
       if (currentUser.role === "student") {
-  query = { course: currentUser.course };
-}
+        query.course = currentUser.course;
+      }
 
-if (currentUser.role === "teacher") {
-  query = { teacherId: currentUser._id };
-}
-
-      // Admin can see all materials
+      if (currentUser.role === "teacher") {
+        query.teacherId = currentUser._id;
+      }
 
       const materials = await Material.find(query)
         .populate("course", "name")
-        .populate("teacherId", "name")
+        // ❌ DO NOT populate teacherId here
         .sort({ createdAt: -1 });
 
       return res.status(200).json(materials);
     }
 
-    // POST /api/materials - Create material (teachers only)
+    // ======================
+    // POST /api/materials
+    // ======================
     if (req.method === "POST") {
       if (currentUser.role !== "teacher") {
         return res.status(403).json({ message: "Only teachers can create materials" });

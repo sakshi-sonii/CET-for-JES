@@ -20,7 +20,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { id } = req.query;
 
+    // ======================
     // GET /api/materials/:id
+    // ======================
     if (req.method === "GET") {
       const material = await Material.findById(id)
         .populate("course", "name")
@@ -33,7 +35,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(material);
     }
 
-    // PATCH /api/materials/:id
+    // ======================
+    // PATCH
+    // ======================
     if (req.method === "PATCH") {
       const material = await Material.findById(id);
 
@@ -41,7 +45,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ message: "Material not found" });
       }
 
-      // Only the teacher who created it or admin can update
       if (
         currentUser.role !== "admin" &&
         material.teacherId.toString() !== currentUser._id.toString()
@@ -60,7 +63,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(material);
     }
 
-    // DELETE /api/materials/:id
+    // ======================
+    // DELETE
+    // ======================
     if (req.method === "DELETE") {
       const material = await Material.findById(id);
 
@@ -68,7 +73,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ message: "Material not found" });
       }
 
-      // Only the teacher who created it or admin can delete
       if (
         currentUser.role !== "admin" &&
         material.teacherId.toString() !== currentUser._id.toString()
@@ -76,7 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(403).json({ message: "Access denied" });
       }
 
-      await Material.findByIdAndDelete(id);
+      await material.deleteOne();
       return res.status(200).json({ message: "Material deleted successfully" });
     }
 
