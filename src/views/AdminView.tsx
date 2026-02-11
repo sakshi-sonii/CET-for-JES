@@ -40,23 +40,79 @@ const AdminView: React.FC<AdminViewProps> = ({
     approved: false,
   })
 
-  const pendingUsers = users.filter((u) => !u.approved && u.role === 'teacher')
-  const pendingTests = tests.filter((t) => !t.approved)
+  const pendingUsers = users.filter((u) => u && !u.approved && u.role === 'teacher')
+  const pendingTests = tests.filter((t) => t && !t.approved)
+
+  // Filter out any null/broken submissions
+  const validAttempts = (attempts || []).filter(a =>
+    a && a._id && a.totalScore !== undefined && a.totalMaxScore !== undefined
+  )
 
   const getTotalQuestions = (test: Test): number => {
-    if (!test.sections) return 0
-    return test.sections.reduce((sum, s) => sum + (s.questions?.length || 0), 0)
+    if (!test?.sections) return 0
+    return test.sections.reduce((sum, s) => sum + (s?.questions?.length || 0), 0)
   }
 
   const getTotalMarks = (test: Test): number => {
-    if (!test.sections) return 0
+    if (!test?.sections) return 0
     return test.sections.reduce((sum, s) => {
+      if (!s) return sum
       const marks = s.marksPerQuestion || (s.subject === 'maths' ? 2 : 1)
       return sum + (s.questions?.length || 0) * marks
     }, 0)
   }
 
+  // ========================
+  // SAFE ACCESSOR HELPERS
+  // ========================
+  const safeGetId = (ref: any): string => {
+    if (!ref) return ''
+    if (typeof ref === 'string') return ref
+    return ref._id?.toString?.() || ref.id?.toString?.() || String(ref)
+  }
+
+  const getStudentName = (submission: TestSubmission): string => {
+    if (!submission) return 'Unknown'
+    const student = submission.studentId as any
+    if (!student) return 'Deleted User'
+    if (typeof student === 'object' && student?.name) return student.name
+    const found = users.find(u => u && u._id === String(student))
+    return found?.name || 'Unknown'
+  }
+
+  const getStudentEmail = (submission: TestSubmission): string => {
+    if (!submission) return ''
+    const student = submission.studentId as any
+    if (!student) return ''
+    if (typeof student === 'object' && student?.email) return student.email
+    const found = users.find(u => u && u._id === String(student))
+    return found?.email || ''
+  }
+
+  const getTestTitle = (submission: TestSubmission): string => {
+    if (!submission) return 'Unknown Test'
+    const test = submission.testId as any
+    if (!test) return 'Deleted Test'
+    if (typeof test === 'object' && test?.title) return test.title
+    const found = tests.find(t => t && t._id === String(test))
+    return found?.title || 'Unknown Test'
+  }
+
+  const getTestId = (submission: TestSubmission): string => {
+    if (!submission) return ''
+    return safeGetId(submission.testId)
+  }
+
+  const getStudentId = (submission: TestSubmission): string => {
+    if (!submission) return ''
+    return safeGetId(submission.studentId)
+  }
+
+  // ========================
+  // ACTIONS
+  // ========================
   const approveTeacher = async (id: string) => {
+    if (!id) return
     setActionLoading(id)
     try {
       await api(`users/${id}/approve`, 'PATCH')
@@ -69,6 +125,7 @@ const AdminView: React.FC<AdminViewProps> = ({
   }
 
   const rejectTeacher = async (id: string) => {
+    if (!id) return
     setActionLoading(id)
     try {
       await api(`users/${id}`, 'DELETE')
@@ -81,6 +138,7 @@ const AdminView: React.FC<AdminViewProps> = ({
   }
 
   const approveTest = async (id: string) => {
+    if (!id) return
     setActionLoading(id)
     try {
       await api(`tests/${id}/approve`, 'PATCH')
@@ -93,6 +151,7 @@ const AdminView: React.FC<AdminViewProps> = ({
   }
 
   const rejectTest = async (id: string) => {
+    if (!id) return
     setActionLoading(id)
     try {
       await api(`tests/${id}`, 'DELETE')
@@ -123,48 +182,36 @@ const AdminView: React.FC<AdminViewProps> = ({
     }
   }
 
+  const getRankBadge = (rank: number) => {
+    if (rank === 1) return '🥇'
+    if (rank === 2) return '🥈'
+    if (rank === 3) return '🥉'
+    return `#${rank}`
+  }
+
+  const getScoreColor = (pct: number) => {
+    if (pct >= 80) return 'text-green-600'
+    if (pct >= 60) return 'text-yellow-600'
+    return 'text-red-600'
+  }
+
   // ========================
-  // Rankings computation
+  // RANKINGS COMPUTATION (with null safety)
   // ========================
-  const getStudentName = (submission: TestSubmission): string => {
-    const student = submission.studentId as any
-    if (typeof student === 'object' && student?.name) return student.name
-    const found = users.find(u => u._id === String(student))
-    return found?.name || 'Unknown'
-  }
-
-  const getStudentEmail = (submission: TestSubmission): string => {
-    const student = submission.studentId as any
-    if (typeof student === 'object' && student?.email) return student.email
-    const found = users.find(u => u._id === String(student))
-    return found?.email || ''
-  }
-
-  const getTestTitle = (submission: TestSubmission): string => {
-    const test = submission.testId as any
-    if (typeof test === 'object' && test?.title) return test.title
-    const found = tests.find(t => t._id === String(test))
-    return found?.title || 'Unknown Test'
-  }
-
-  const getTestId = (submission: TestSubmission): string => {
-    const test = submission.testId as any
-    if (typeof test === 'object' && test?._id) return test._id
-    return String(test)
-  }
-
-  // Filter and sort submissions for rankings
   const filteredSubmissions = rankingsTestFilter === 'all'
-    ? attempts
-    : attempts.filter(a => getTestId(a) === rankingsTestFilter)
+    ? validAttempts
+    : validAttempts.filter(a => getTestId(a) === rankingsTestFilter)
 
   const sortedSubmissions = [...filteredSubmissions].sort((a, b) => {
-    if (b.percentage !== a.percentage) return b.percentage - a.percentage
-    if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore
-    return new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()
+    const pctA = a?.percentage || 0
+    const pctB = b?.percentage || 0
+    if (pctB !== pctA) return pctB - pctA
+    const scoreA = a?.totalScore || 0
+    const scoreB = b?.totalScore || 0
+    if (scoreB !== scoreA) return scoreB - scoreA
+    return new Date(a?.submittedAt || 0).getTime() - new Date(b?.submittedAt || 0).getTime()
   })
 
-  // Overall student rankings (aggregate across all tests)
   const getOverallRankings = () => {
     const studentMap: Record<string, {
       name: string
@@ -172,13 +219,13 @@ const AdminView: React.FC<AdminViewProps> = ({
       totalScore: number
       totalMaxScore: number
       testsAttempted: number
-      submissions: TestSubmission[]
     }> = {}
 
-    attempts.forEach(a => {
-      const studentId = typeof a.studentId === 'object'
-        ? (a.studentId as any)._id
-        : String(a.studentId)
+    validAttempts.forEach(a => {
+      if (!a) return
+
+      const studentId = getStudentId(a)
+      if (!studentId) return
 
       if (!studentMap[studentId]) {
         studentMap[studentId] = {
@@ -187,14 +234,12 @@ const AdminView: React.FC<AdminViewProps> = ({
           totalScore: 0,
           totalMaxScore: 0,
           testsAttempted: 0,
-          submissions: [],
         }
       }
 
-      studentMap[studentId].totalScore += a.totalScore
-      studentMap[studentId].totalMaxScore += a.totalMaxScore
+      studentMap[studentId].totalScore += (a.totalScore || 0)
+      studentMap[studentId].totalMaxScore += (a.totalMaxScore || 0)
       studentMap[studentId].testsAttempted += 1
-      studentMap[studentId].submissions.push(a)
     })
 
     return Object.entries(studentMap)
@@ -209,19 +254,6 @@ const AdminView: React.FC<AdminViewProps> = ({
   }
 
   const overallRankings = getOverallRankings()
-
-  const getRankBadge = (rank: number) => {
-    if (rank === 1) return '🥇'
-    if (rank === 2) return '🥈'
-    if (rank === 3) return '🥉'
-    return `#${rank}`
-  }
-
-  const getScoreColor = (pct: number) => {
-    if (pct >= 80) return 'text-green-600'
-    if (pct >= 60) return 'text-yellow-600'
-    return 'text-red-600'
-  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -267,11 +299,6 @@ const AdminView: React.FC<AdminViewProps> = ({
                   {pendingTests.length}
                 </span>
               )}
-              {tab === 'rankings' && (
-                <span className="ml-2 bg-yellow-500 text-white text-xs px-2 py-0.5 rounded-full">
-                  {attempts.length}
-                </span>
-              )}
             </button>
           ))}
         </div>
@@ -309,6 +336,7 @@ const AdminView: React.FC<AdminViewProps> = ({
 
             <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-xl font-bold mb-4">All Users ({users.length})</h2>
+
               <div className="mb-4 p-4 border rounded-lg bg-gray-50">
                 <h3 className="font-medium mb-2">Add User</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -322,7 +350,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                   </select>
                   <select value={newUserForm.course} onChange={e => setNewUserForm({...newUserForm, course: e.target.value})} className="px-3 py-2 border rounded">
                     <option value="">Course (optional)</option>
-                    {courses.map(c => <option key={c._id} value={c._id}>{c.name}</option>)}
+                    {courses.map(c => c && <option key={c._id} value={c._id}>{c.name}</option>)}
                   </select>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" checked={newUserForm.approved} onChange={e => setNewUserForm({...newUserForm, approved: e.target.checked})} />
@@ -344,12 +372,14 @@ const AdminView: React.FC<AdminViewProps> = ({
                     } catch (error: any) {
                       alert(error.message || 'Failed to create user');
                     } finally { setActionLoading(null); }
-                  }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">{actionLoading === 'create-user' ? '...' : 'Create User'}</button>
+                  }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">
+                    {actionLoading === 'create-user' ? '...' : 'Create User'}
+                  </button>
                 </div>
               </div>
 
               <div className="space-y-2">
-                {users.map((u) => (
+                {users.filter(u => u).map((u) => (
                   <div key={u._id} className="flex justify-between items-center p-3 border rounded">
                     <div>
                       <p className="font-medium">{u.name}</p>
@@ -386,7 +416,8 @@ const AdminView: React.FC<AdminViewProps> = ({
               ) : (
                 <div className="space-y-3">
                   {pendingTests.map((t) => {
-                    const teacher = users.find((u) => u._id === t.teacherId)
+                    if (!t) return null
+                    const teacher = users.find((u) => u && u._id === t.teacherId)
                     const isExpanded = expandedTest === t._id
                     return (
                       <div key={t._id} className="p-4 border rounded-lg">
@@ -395,7 +426,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                             <p className="font-bold text-lg">{t.title}</p>
                             <p className="text-sm text-gray-600 mb-2">By: {teacher?.name || 'Unknown'} | Total: {t.totalDuration || 180} min</p>
                             <div className="flex flex-wrap gap-2 mb-2">
-                              {t.sections?.map((section) => (
+                              {t.sections?.map((section) => section && (
                                 <span key={section.subject} className={`px-3 py-1 rounded-full text-xs font-medium ${getSectionBadgeColor(section.subject)}`}>
                                   {section.subject.charAt(0).toUpperCase() + section.subject.slice(1)}: {section.questions?.length || 0}Q × {section.marksPerQuestion || (section.subject === 'maths' ? 2 : 1)}m
                                 </span>
@@ -417,15 +448,15 @@ const AdminView: React.FC<AdminViewProps> = ({
                             </button>
                           </div>
                         </div>
-                        {isExpanded && (
+                        {isExpanded && t.sections && (
                           <div className="mt-4 border-t pt-4">
-                            {t.sections?.map((section) => (
+                            {t.sections.map((section) => section && (
                               <div key={section.subject} className="mb-4">
                                 <h4 className={`font-semibold text-sm uppercase tracking-wide mb-2 ${section.subject === 'physics' ? 'text-blue-700' : section.subject === 'chemistry' ? 'text-green-700' : 'text-purple-700'}`}>
-                                  {section.subject} ({section.questions?.length || 0}Q, {section.marksPerQuestion || (section.subject === 'maths' ? 2 : 1)} marks/Q)
+                                  {section.subject} ({section.questions?.length || 0}Q)
                                 </h4>
                                 <div className="space-y-2 pl-4">
-                                  {section.questions?.map((q, qIdx) => (
+                                  {section.questions?.map((q, qIdx) => q && (
                                     <div key={qIdx} className="text-sm border-l-2 border-gray-200 pl-3 py-1">
                                       <p className="font-medium text-gray-800">Q{qIdx + 1}. {q.question}</p>
                                       <div className="flex flex-wrap gap-3 mt-1 text-gray-600">
@@ -452,38 +483,34 @@ const AdminView: React.FC<AdminViewProps> = ({
 
             <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-xl font-bold mb-4">All Tests ({tests.length})</h2>
-              {tests.length === 0 ? (
-                <p className="text-gray-500">No tests created yet</p>
-              ) : (
-                <div className="space-y-2">
-                  {tests.map((t) => {
-                    const teacher = users.find((u) => u._id === t.teacherId)
-                    return (
-                      <div key={t._id} className="flex justify-between items-center p-3 border rounded">
-                        <div>
-                          <p className="font-medium">{t.title}</p>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {t.sections?.map((s) => (
-                              <span key={s.subject} className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(s.subject)}`}>
-                                {s.subject}: {s.questions?.length || 0}Q
-                              </span>
-                            ))}
-                          </div>
-                          <p className="text-xs text-gray-500 mt-1">By: {teacher?.name || 'Unknown'} | {getTotalMarks(t)} marks</p>
+              <div className="space-y-2">
+                {tests.filter(t => t).map((t) => {
+                  const teacher = users.find((u) => u && u._id === t.teacherId)
+                  return (
+                    <div key={t._id} className="flex justify-between items-center p-3 border rounded">
+                      <div>
+                        <p className="font-medium">{t.title}</p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {t.sections?.map((s) => s && (
+                            <span key={s.subject} className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(s.subject)}`}>
+                              {s.subject}: {s.questions?.length || 0}Q
+                            </span>
+                          ))}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`px-3 py-1 rounded text-xs font-medium ${t.approved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                            {t.approved ? 'Approved' : 'Pending'}
-                          </span>
-                          <span className={`px-3 py-1 rounded text-xs font-medium ${t.active ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
-                            {t.active ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
+                        <p className="text-xs text-gray-500 mt-1">By: {teacher?.name || 'Unknown'} | {getTotalMarks(t)} marks</p>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
+                      <div className="flex items-center gap-2">
+                        <span className={`px-3 py-1 rounded text-xs font-medium ${t.approved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                          {t.approved ? 'Approved' : 'Pending'}
+                        </span>
+                        <span className={`px-3 py-1 rounded text-xs font-medium ${t.active ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
+                          {t.active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -500,10 +527,10 @@ const AdminView: React.FC<AdminViewProps> = ({
               </button>
             </div>
             <div className="space-y-2">
-              {courses.map((c) => (
+              {courses.filter(c => c).map((c) => (
                 <div key={c._id} className="p-4 border rounded-lg flex justify-between items-center">
                   <div><p className="font-bold">{c.name}</p></div>
-                  <span className="text-sm text-gray-500">{tests.filter((t) => t.course === c._id).length} tests</span>
+                  <span className="text-sm text-gray-500">{tests.filter((t) => t && t.course === c._id).length} tests</span>
                 </div>
               ))}
             </div>
@@ -513,7 +540,7 @@ const AdminView: React.FC<AdminViewProps> = ({
         {/* ======================== RANKINGS TAB ======================== */}
         {activeTab === 'rankings' && (
           <div className="space-y-6">
-            {/* Overall Student Rankings */}
+            {/* Overall Rankings */}
             <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-xl font-bold mb-4">🏆 Overall Student Rankings</h2>
               {overallRankings.length === 0 ? (
@@ -527,25 +554,19 @@ const AdminView: React.FC<AdminViewProps> = ({
                         <th className="pb-3 pr-4 font-semibold text-gray-600">Student</th>
                         <th className="pb-3 pr-4 font-semibold text-gray-600">Email</th>
                         <th className="pb-3 pr-4 font-semibold text-gray-600 text-center">Tests</th>
-                        <th className="pb-3 pr-4 font-semibold text-gray-600 text-center">Total Score</th>
-                        <th className="pb-3 font-semibold text-gray-600 text-center">Avg %</th>
+                        <th className="pb-3 pr-4 font-semibold text-gray-600 text-center">Score</th>
+                        <th className="pb-3 font-semibold text-gray-600 text-center">%</th>
                       </tr>
                     </thead>
                     <tbody>
                       {overallRankings.map((student, idx) => (
-                        <tr key={student.studentId} className={`border-b hover:bg-gray-50 ${idx < 3 ? 'bg-yellow-50' : ''}`}>
-                          <td className="py-3 pr-4">
-                            <span className="text-lg font-bold">{getRankBadge(idx + 1)}</span>
-                          </td>
+                        <tr key={student.studentId || idx} className={`border-b hover:bg-gray-50 ${idx < 3 ? 'bg-yellow-50' : ''}`}>
+                          <td className="py-3 pr-4"><span className="text-lg font-bold">{getRankBadge(idx + 1)}</span></td>
                           <td className="py-3 pr-4 font-medium">{student.name}</td>
                           <td className="py-3 pr-4 text-gray-500">{student.email}</td>
                           <td className="py-3 pr-4 text-center">{student.testsAttempted}</td>
-                          <td className="py-3 pr-4 text-center font-semibold">
-                            {student.totalScore}/{student.totalMaxScore}
-                          </td>
-                          <td className={`py-3 text-center font-bold ${getScoreColor(student.percentage)}`}>
-                            {student.percentage}%
-                          </td>
+                          <td className="py-3 pr-4 text-center font-semibold">{student.totalScore}/{student.totalMaxScore}</td>
+                          <td className={`py-3 text-center font-bold ${getScoreColor(student.percentage)}`}>{student.percentage}%</td>
                         </tr>
                       ))}
                     </tbody>
@@ -558,13 +579,9 @@ const AdminView: React.FC<AdminViewProps> = ({
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-bold">📊 Test-wise Rankings</h2>
-                <select
-                  value={rankingsTestFilter}
-                  onChange={(e) => setRankingsTestFilter(e.target.value)}
-                  className="px-4 py-2 border rounded-lg text-sm"
-                >
+                <select value={rankingsTestFilter} onChange={(e) => setRankingsTestFilter(e.target.value)} className="px-4 py-2 border rounded-lg text-sm">
                   <option value="all">All Tests</option>
-                  {tests.filter(t => t.approved).map(t => (
+                  {tests.filter(t => t && t.approved).map(t => (
                     <option key={t._id} value={t._id}>{t.title}</option>
                   ))}
                 </select>
@@ -589,15 +606,15 @@ const AdminView: React.FC<AdminViewProps> = ({
                     </thead>
                     <tbody>
                       {sortedSubmissions.map((sub, idx) => {
-                        const phySr = sub.sectionResults?.find(s => s.subject === 'physics')
-                        const chemSr = sub.sectionResults?.find(s => s.subject === 'chemistry')
-                        const mathSr = sub.sectionResults?.find(s => s.subject === 'maths')
+                        if (!sub) return null
+                        const sectionResults = sub.sectionResults || []
+                        const phySr = sectionResults.find(s => s?.subject === 'physics')
+                        const chemSr = sectionResults.find(s => s?.subject === 'chemistry')
+                        const mathSr = sectionResults.find(s => s?.subject === 'maths')
 
                         return (
-                          <tr key={sub._id} className={`border-b hover:bg-gray-50 ${idx < 3 ? 'bg-yellow-50' : ''}`}>
-                            <td className="py-3 pr-4">
-                              <span className="text-lg font-bold">{getRankBadge(idx + 1)}</span>
-                            </td>
+                          <tr key={sub._id || idx} className={`border-b hover:bg-gray-50 ${idx < 3 ? 'bg-yellow-50' : ''}`}>
+                            <td className="py-3 pr-4"><span className="text-lg font-bold">{getRankBadge(idx + 1)}</span></td>
                             <td className="py-3 pr-4">
                               <p className="font-medium">{getStudentName(sub)}</p>
                               <p className="text-xs text-gray-400">{getStudentEmail(sub)}</p>
@@ -624,12 +641,8 @@ const AdminView: React.FC<AdminViewProps> = ({
                                 </span>
                               ) : '—'}
                             </td>
-                            <td className="py-3 pr-4 text-center font-semibold">
-                              {sub.totalScore}/{sub.totalMaxScore}
-                            </td>
-                            <td className={`py-3 text-center font-bold ${getScoreColor(sub.percentage)}`}>
-                              {sub.percentage}%
-                            </td>
+                            <td className="py-3 pr-4 text-center font-semibold">{sub.totalScore || 0}/{sub.totalMaxScore || 0}</td>
+                            <td className={`py-3 text-center font-bold ${getScoreColor(sub.percentage || 0)}`}>{sub.percentage || 0}%</td>
                           </tr>
                         )
                       })}
@@ -639,23 +652,23 @@ const AdminView: React.FC<AdminViewProps> = ({
               )}
             </div>
 
-            {/* Section-wise top performers */}
+            {/* Section Top Performers */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {['physics', 'chemistry', 'maths'].map(subject => {
-                const subjectScores = attempts
+                const subjectScores = validAttempts
                   .map(a => {
-                    const sr = a.sectionResults?.find(s => s.subject === subject)
-                    if (!sr || sr.maxScore === 0) return null
+                    if (!a?.sectionResults) return null
+                    const sr = a.sectionResults.find(s => s?.subject === subject)
+                    if (!sr || !sr.maxScore || sr.maxScore === 0) return null
                     return {
                       name: getStudentName(a),
-                      score: sr.score,
+                      score: sr.score || 0,
                       maxScore: sr.maxScore,
-                      pct: Math.round((sr.score / sr.maxScore) * 100),
-                      test: getTestTitle(a),
+                      pct: Math.round(((sr.score || 0) / sr.maxScore) * 100),
                     }
                   })
-                  .filter(Boolean)
-                  .sort((a: any, b: any) => b.pct - a.pct)
+                  .filter((x): x is NonNullable<typeof x> => x !== null)
+                  .sort((a, b) => b.pct - a.pct)
                   .slice(0, 5)
 
                 return (
@@ -665,15 +678,10 @@ const AdminView: React.FC<AdminViewProps> = ({
                       <p className="text-gray-400 text-sm">No data</p>
                     ) : (
                       <div className="space-y-2">
-                        {subjectScores.map((s: any, i: number) => (
+                        {subjectScores.map((s, i) => (
                           <div key={i} className="flex justify-between items-center text-sm">
-                            <span>
-                              <span className="font-medium mr-1">{getRankBadge(i + 1)}</span>
-                              {s.name}
-                            </span>
-                            <span className={`font-bold ${getScoreColor(s.pct)}`}>
-                              {s.score}/{s.maxScore}
-                            </span>
+                            <span><span className="font-medium mr-1">{getRankBadge(i + 1)}</span> {s.name}</span>
+                            <span className={`font-bold ${getScoreColor(s.pct)}`}>{s.score}/{s.maxScore}</span>
                           </div>
                         ))}
                       </div>
@@ -694,7 +702,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                 <p className="text-3xl font-bold">{users.length}</p>
                 <p className="text-gray-600">Total Users</p>
                 <div className="mt-2 text-xs text-gray-500">
-                  {users.filter(u => u.role === 'student').length} students | {users.filter(u => u.role === 'teacher').length} teachers
+                  {users.filter(u => u?.role === 'student').length} students | {users.filter(u => u?.role === 'teacher').length} teachers
                 </div>
               </div>
               <div className="bg-white rounded-lg shadow p-6">
@@ -702,13 +710,13 @@ const AdminView: React.FC<AdminViewProps> = ({
                 <p className="text-3xl font-bold">{tests.length}</p>
                 <p className="text-gray-600">Total Tests</p>
                 <div className="mt-2 text-xs text-gray-500">
-                  {tests.filter(t => t.approved).length} approved | {pendingTests.length} pending
+                  {tests.filter(t => t?.approved).length} approved | {pendingTests.length} pending
                 </div>
               </div>
               <div className="bg-white rounded-lg shadow p-6">
                 <div className="text-2xl mb-3">📚</div>
-                <p className="text-3xl font-bold">{attempts.length}</p>
-                <p className="text-gray-600">Test Submissions</p>
+                <p className="text-3xl font-bold">{validAttempts.length}</p>
+                <p className="text-gray-600">Submissions</p>
               </div>
               <div className="bg-white rounded-lg shadow p-6">
                 <div className="text-2xl mb-3">🎓</div>
@@ -719,17 +727,18 @@ const AdminView: React.FC<AdminViewProps> = ({
 
             <div className="bg-white rounded-lg shadow p-6">
               <h3 className="text-lg font-bold mb-4">Test Statistics</h3>
-              {tests.filter(t => t.approved).length === 0 ? (
+              {tests.filter(t => t?.approved).length === 0 ? (
                 <p className="text-gray-500">No approved tests yet</p>
               ) : (
                 <div className="space-y-3">
-                  {tests.filter(t => t.approved).map(t => {
-                    const testAttempts = attempts.filter(a => {
-                      const tid = typeof a.testId === 'string' ? a.testId : (a.testId as any)?._id
+                  {tests.filter(t => t?.approved).map(t => {
+                    if (!t) return null
+                    const testAttempts = validAttempts.filter(a => {
+                      const tid = safeGetId(a?.testId)
                       return tid === t._id
                     })
                     const avgScore = testAttempts.length > 0
-                      ? Math.round(testAttempts.reduce((sum, a) => sum + (a.percentage || 0), 0) / testAttempts.length)
+                      ? Math.round(testAttempts.reduce((sum, a) => sum + (a?.percentage || 0), 0) / testAttempts.length)
                       : 0
 
                     return (
@@ -737,7 +746,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                         <div>
                           <p className="font-medium">{t.title}</p>
                           <div className="flex gap-1 mt-1">
-                            {t.sections?.map(s => (
+                            {t.sections?.map(s => s && (
                               <span key={s.subject} className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(s.subject)}`}>
                                 {s.subject}: {s.questions?.length || 0}Q
                               </span>
