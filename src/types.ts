@@ -5,8 +5,9 @@ export interface Question {
   questionImage?: string;
   options: string[];
   optionImages?: string[];
-  correct: number; // index of the correct option (0-based)
-  explanation?: string; // explanation for the correct answer
+  correct: number;
+  explanation?: string;
+  explanationImage?: string;  // ← NEW
 }
 
 export interface TestSection {
@@ -152,3 +153,4 @@ export interface CSVQuestionRow {
   correctAnswer: "A" | "B" | "C" | "D";
   explanation: string;
 }
+

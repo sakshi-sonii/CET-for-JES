@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { connectDB, Test, getUserFromRequest } from "../../_db.js";
+import { connectDB, Test, getUserFromRequest, withRetry } from "../../_db.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -32,37 +32,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ message: "Invalid test ID" });
     }
 
-    const test = await Test.findById(id);
+    // Fetch only sections for validation — don't load full question content
+    const test = await withRetry(() =>
+      Test.findById(id)
+        .select("approved sections.subject sections.questions")
+        .lean()
+    );
 
     if (!test) {
       return res.status(404).json({ message: "Test not found" });
     }
 
-    // Validate that the test has all 3 required sections before approving
+    if (test.approved) {
+      return res.status(400).json({ message: "Test is already approved" });
+    }
+
+    // Validate all 3 sections exist with questions
     const requiredSubjects = ["physics", "chemistry", "maths"];
     const testSubjects = test.sections?.map((s: any) => s.subject) || [];
 
     for (const subj of requiredSubjects) {
       if (!testSubjects.includes(subj)) {
         return res.status(400).json({
-          message: `Cannot approve: test is missing the "${subj}" section. All three sections (physics, chemistry, maths) are required.`,
+          message: `Cannot approve: missing "${subj}" section.`,
         });
       }
     }
 
-    // Validate each section has at least 1 question
     for (const section of test.sections) {
       if (!section.questions || section.questions.length === 0) {
         return res.status(400).json({
-          message: `Cannot approve: section "${section.subject}" has no questions.`,
+          message: `Cannot approve: "${section.subject}" has no questions.`,
         });
       }
     }
 
-    test.approved = true;
-    await test.save();
+    // Single atomic update — no need to fetch full doc, modify, and save
+    const updated = await withRetry(() =>
+      Test.findByIdAndUpdate(
+        id,
+        { approved: true },
+        { new: true }
+      ).lean()
+    );
 
-    return res.status(200).json(test);
+    return res.status(200).json(updated);
   } catch (error: any) {
     return res.status(500).json({ message: error.message });
   }

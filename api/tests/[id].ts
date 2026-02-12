@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { connectDB, Test, getUserFromRequest } from "../_db.js";
+import { connectDB, Test, getUserFromRequest, withRetry } from "../_db.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -24,54 +24,80 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ message: "Invalid test ID" });
     }
 
-    // GET /api/tests/:id - Get single test
+    // ======================
+    // GET
+    // ======================
     if (req.method === "GET") {
-      const test = await Test.findById(id);
+      res.setHeader("Cache-Control", "s-maxage=10, stale-while-revalidate=30");
+
+      // Build access query based on role — single query handles auth + fetch
+      let query: any = { _id: id };
+
+      if (currentUser.role === "student") {
+        query.approved = true;
+        query.active = true;
+        query.course = currentUser.course;
+      } else if (currentUser.role === "teacher") {
+        query.teacherId = currentUser._id;
+      }
+      // Admin: no extra filters
+
+      const test = await withRetry(() =>
+        Test.findOne(query).lean()
+      );
 
       if (!test) {
+        // Distinguish 404 vs 403
+        if (currentUser.role !== "admin") {
+          const exists = await Test.exists({ _id: id });
+          if (exists) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
         return res.status(404).json({ message: "Test not found" });
-      }
-
-      // Check access
-      if (currentUser.role === "student") {
-        if (!test.approved || !test.active || test.course.toString() !== currentUser.course?.toString()) {
-          return res.status(403).json({ message: "Access denied" });
-        }
-      } else if (currentUser.role === "teacher") {
-        if (test.teacherId.toString() !== currentUser._id.toString()) {
-          return res.status(403).json({ message: "Access denied" });
-        }
       }
 
       return res.status(200).json(test);
     }
 
-    // PATCH /api/tests/:id - Update test
+    // ======================
+    // PATCH
+    // ======================
     if (req.method === "PATCH") {
-      const test = await Test.findById(id);
-
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
+      if (currentUser.role !== "teacher" && currentUser.role !== "admin") {
+        return res.status(403).json({ message: "Access denied" });
       }
 
       const { active, title, sections, sectionTimings } = req.body;
 
-      // Teachers can only update their own tests
+      // Build update based on role
+      const update: any = {};
+
       if (currentUser.role === "teacher") {
-        if (test.teacherId.toString() !== currentUser._id.toString()) {
+        // First check: does this test belong to the teacher?
+        // Use lean + select to minimize data loaded
+        const test = await withRetry(() =>
+          Test.findOne({ _id: id, teacherId: currentUser._id })
+            .select("approved teacherId")
+            .lean()
+        );
+
+        if (!test) {
+          const exists = await Test.exists({ _id: id });
+          if (!exists) return res.status(404).json({ message: "Test not found" });
           return res.status(403).json({ message: "Access denied" });
         }
 
-        // Teachers can only toggle active status if test is approved
+        // Teachers can toggle active only if approved
         if (active !== undefined && test.approved) {
-          test.active = active;
+          update.active = active;
         }
 
-        // Teachers can update sections if test is not yet approved
+        // Teachers can update content only if NOT yet approved
         if (!test.approved) {
-          if (title) test.title = title;
+          if (title) update.title = title;
           if (sections && Array.isArray(sections)) {
-            test.sections = sections.map((section: any) => ({
+            update.sections = sections.map((section: any) => ({
               subject: section.subject.toLowerCase(),
               marksPerQuestion: section.subject.toLowerCase() === "maths" ? 2 : 1,
               questions: section.questions.map((q: any) => ({
@@ -82,17 +108,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               })),
             }));
           }
-          if (sectionTimings) {
-            test.sectionTimings = sectionTimings;
-          }
+          if (sectionTimings) update.sectionTimings = sectionTimings;
         }
-      }
-      // Admin can update any test
-      else if (currentUser.role === "admin") {
-        if (active !== undefined) test.active = active;
-        if (title) test.title = title;
+      } else {
+        // Admin can update anything
+        if (active !== undefined) update.active = active;
+        if (title) update.title = title;
         if (sections && Array.isArray(sections)) {
-          test.sections = sections.map((section: any) => ({
+          update.sections = sections.map((section: any) => ({
             subject: section.subject.toLowerCase(),
             marksPerQuestion: section.subject.toLowerCase() === "maths" ? 2 : 1,
             questions: section.questions.map((q: any) => ({
@@ -103,34 +126,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             })),
           }));
         }
-        if (sectionTimings) {
-          test.sectionTimings = sectionTimings;
-        }
-      } else {
-        return res.status(403).json({ message: "Access denied" });
+        if (sectionTimings) update.sectionTimings = sectionTimings;
       }
 
-      await test.save();
-      return res.status(200).json(test);
-    }
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
 
-    // DELETE /api/tests/:id - Delete test
-    if (req.method === "DELETE") {
-      const test = await Test.findById(id);
+      // Atomic update
+      const updated = await withRetry(() =>
+        Test.findByIdAndUpdate(id, update, { new: true }).lean()
+      );
 
-      if (!test) {
+      if (!updated) {
         return res.status(404).json({ message: "Test not found" });
       }
 
-      // Only admin or the teacher who created it can delete
-      if (
-        currentUser.role !== "admin" &&
-        test.teacherId.toString() !== currentUser._id.toString()
-      ) {
+      return res.status(200).json(updated);
+    }
+
+    // ======================
+    // DELETE
+    // ======================
+    if (req.method === "DELETE") {
+      // Single atomic query: find + check ownership + delete
+      const query: any = { _id: id };
+
+      if (currentUser.role !== "admin") {
+        query.teacherId = currentUser._id;
+      }
+
+      const deleted = await withRetry(() =>
+        Test.findOneAndDelete(query).select("_id title").lean()
+      );
+
+      if (!deleted) {
+        const exists = await Test.exists({ _id: id });
+        if (!exists) return res.status(404).json({ message: "Test not found" });
         return res.status(403).json({ message: "Access denied" });
       }
 
-      await Test.findByIdAndDelete(id);
       return res.status(200).json({ message: "Test deleted successfully" });
     }
 
