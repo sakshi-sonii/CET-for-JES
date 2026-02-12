@@ -1,5 +1,7 @@
 // Types for multi-section tests: Physics, Chemistry, Maths
 
+export type SubjectKey = 'physics' | 'chemistry' | 'maths' | 'biology';
+
 export interface Question {
   question: string;
   questionImage?: string;
@@ -7,13 +9,30 @@ export interface Question {
   optionImages?: string[];
   correct: number;
   explanation?: string;
-  explanationImage?: string;  // ← NEW
+  explanationImage?: string;
 }
 
 export interface TestSection {
-  subject: "physics" | "chemistry" | "maths";
-  marksPerQuestion: number; // 1 for physics/chemistry, 2 for maths
+  subject: SubjectKey;
+  marksPerQuestion?: number;
   questions: Question[];
+}
+
+export interface Test {
+  _id: string;
+  title: string;
+  course: string;
+  teacherId: string | { _id: string };
+  testType?: 'mock' | 'subject';
+  sections: TestSection[];
+  totalDuration?: number;
+  sectionTimings?: {
+    physicsChemistry?: number;
+    maths?: number;
+  };
+  approved: boolean;
+  active: boolean;
+  createdAt?: string;
 }
 
 export interface SectionTimings {
@@ -21,18 +40,7 @@ export interface SectionTimings {
   maths: number; // minutes for maths section (default 90)
 }
 
-export interface Test {
-  _id: string;
-  title: string;
-  course: string;
-  sections: TestSection[];
-  sectionTimings: SectionTimings;
-  totalDuration: number; // total in minutes (default 180)
-  teacherId: string;
-  approved: boolean;
-  active: boolean;
-  createdAt: string;
-}
+
 
 // ========================
 // Test-taking state
