@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { connectDB, Material, getUserFromRequest } from "./_db.js";
+import { connectDB, Material, getUserFromRequest, withRetry } from "./_db.js";
 import mongoose from "mongoose";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -27,19 +27,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (currentUser.role === "student") {
         query.course = currentUser.course;
+      } else if (currentUser.role === "teacher") {
+        query.teacherId = new mongoose.Types.ObjectId(currentUser._id.toString());
       }
+      // Admin sees all
 
-      if (currentUser.role === "teacher") {
-        // Fix: Ensure proper ObjectId comparison for teacherId
-        const teacherObjectId = new mongoose.Types.ObjectId(currentUser._id.toString());
-        query.teacherId = teacherObjectId;
-      }
-
-      // admin sees all — no filter applied
-
-      const materials = await Material.find(query)
-        .populate("course", "name")
-        .sort({ createdAt: -1 });
+      const materials = await withRetry(() =>
+        Material.find(query)
+          .populate("course", "name")
+          .sort({ createdAt: -1 })
+          .lean()
+      );
 
       return res.status(200).json(materials);
     }
@@ -58,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const { title, course, subject, content, type } = req.body;
 
-      if (!title || !course || !subject || !content || !type) {
+      if (!title?.trim() || !course || !subject?.trim() || !content?.trim() || !type) {
         return res.status(400).json({ message: "All fields are required" });
       }
 
@@ -66,21 +64,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: "Invalid material type" });
       }
 
-      const material = await Material.create({
-        title,
-        course,
-        subject,
-        content,
-        type,
-        // Fix: Store teacherId as a proper ObjectId
-        teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
-      });
+      const material = await withRetry(() =>
+        Material.create({
+          title: title.trim(),
+          course,
+          subject: subject.trim(),
+          content,
+          type,
+          teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
+        })
+      );
 
       return res.status(201).json(material);
     }
 
     return res.status(405).json({ message: "Method not allowed" });
   } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+    console.error("Materials API error:", error.message);
+    return res.status(500).json({ message: error.message || "Internal server error" });
   }
 }

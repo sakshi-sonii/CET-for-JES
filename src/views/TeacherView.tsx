@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { BookOpen, LogOut, Upload, ImageIcon, FileText, Trash2, Download, Plus } from 'lucide-react';
-import type { User, Test, Course, Material, Question } from '../types';
+import { BookOpen, LogOut, Upload, ImageIcon, FileText, Trash2, Download, Plus, Eye, EyeOff, Clock, Settings } from 'lucide-react';
+import type { User, Test, Course, Material, Question, TestType, CourseStream } from '../types';
 import { api } from '../api';
 
 interface TeacherViewProps {
@@ -93,6 +93,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const [sections, setSections] = useState<SectionForm[]>([]);
   const [currentSection, setCurrentSection] = useState(0);
 
+  // New: Test type and timing controls
+  const [testType, setTestType] = useState<TestType>('mock');
+  const [stream, setStream] = useState<CourseStream>('PCM');
+  const [phyChemTime, setPhyChemTime] = useState(90); // minutes
+  const [mathBioTime, setMathBioTime] = useState(90); // minutes
+  const [customDuration, setCustomDuration] = useState(60); // minutes
+  const [showAnswerKeyOnCreate, setShowAnswerKeyOnCreate] = useState(false);
+
   const [questionForm, setQuestionForm] = useState({
     question: '',
     questionImage: '',
@@ -148,6 +156,21 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     }, 0);
   };
 
+  // Determine if current selection qualifies as mock
+  const isMockEligible = (): boolean => {
+    const hasPhy = selectedSubjects.includes('physics');
+    const hasChem = selectedSubjects.includes('chemistry');
+    const hasMaths = selectedSubjects.includes('maths');
+    const hasBio = selectedSubjects.includes('biology');
+    return hasPhy && hasChem && (hasMaths || hasBio) && selectedSubjects.length >= 3;
+  };
+
+  // Auto-detect stream from subjects
+  const detectStream = (subjects: SubjectKey[]): CourseStream => {
+    if (subjects.includes('biology') && !subjects.includes('maths')) return 'PCB';
+    return 'PCM';
+  };
+
   // ========================
   // Subject selection
   // ========================
@@ -174,6 +197,20 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         setCurrentSection(0);
       }
 
+      // Auto-detect stream
+      setStream(detectStream(newSelected));
+
+      // Auto-set test type
+      const hasPhy = newSelected.includes('physics');
+      const hasChem = newSelected.includes('chemistry');
+      const hasMaths = newSelected.includes('maths');
+      const hasBio = newSelected.includes('biology');
+      if (hasPhy && hasChem && (hasMaths || hasBio) && newSelected.length >= 3) {
+        // Eligible for mock - keep current choice
+      } else {
+        setTestType('custom');
+      }
+
       return newSelected;
     });
   };
@@ -183,12 +220,18 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     switch (preset) {
       case 'pcm':
         subjects = ['physics', 'chemistry', 'maths'];
+        setStream('PCM');
+        setTestType('mock');
         break;
       case 'pcb':
         subjects = ['physics', 'chemistry', 'biology'];
+        setStream('PCB');
+        setTestType('mock');
         break;
       case 'pcmb':
         subjects = ['physics', 'chemistry', 'maths', 'biology'];
+        setStream('PCM');
+        setTestType('mock');
         break;
       default:
         subjects = [];
@@ -370,32 +413,70 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         return;
     }
 
+    // Validate mock test requirements
+    if (testType === 'mock') {
+      const activeSections = sections.filter(s => s.questions.length > 0);
+      const activeSubjects = activeSections.map(s => s.subject);
+      const hasPhy = activeSubjects.includes('physics');
+      const hasChem = activeSubjects.includes('chemistry');
+      const hasMaths = activeSubjects.includes('maths');
+      const hasBio = activeSubjects.includes('biology');
+
+      if (!hasPhy || !hasChem) {
+        alert('Mock test requires both Physics and Chemistry sections');
+        return;
+      }
+      if (!hasMaths && !hasBio) {
+        alert('Mock test requires either Mathematics or Biology section');
+        return;
+      }
+    }
+
+    // Validate custom test duration
+    if (testType === 'custom' && (!customDuration || customDuration < 1)) {
+      alert('Please set a valid duration for the custom test');
+      return;
+    }
+
     setActionLoading('create');
 
     try {
-      const payload = {
+      const filteredSections = sections.filter(s => s.questions.length > 0);
+      const activeSubjects = filteredSections.map(s => s.subject);
+
+      const payload: any = {
         title: testTitle,
         course: testCourse,
-        testType: sections.filter(s => s.questions.length > 0).length === 1 ? 'subject' : 'mock',
-        sections: sections
-          .filter(s => s.questions.length > 0)
-          .map(s => ({
-            subject: s.subject,
-            marksPerQuestion: getMarksPerQuestion(s.subject),
-            questions: s.questions.map(q => ({
-              question: q.question,
-              questionImage: q.questionImage || undefined,
-              options: q.options,
-              optionImages:
-                q.optionImages && q.optionImages.some(img => img)
-                  ? q.optionImages
-                  : undefined,
-              correct: q.correct,
-              explanation: q.explanation || '',
-              explanationImage: q.explanationImage || undefined,
-            })),
+        testType,
+        showAnswerKey: showAnswerKeyOnCreate,
+        sections: filteredSections.map(s => ({
+          subject: s.subject,
+          marksPerQuestion: getMarksPerQuestion(s.subject),
+          questions: s.questions.map(q => ({
+            question: q.question,
+            questionImage: q.questionImage || undefined,
+            options: q.options,
+            optionImages:
+              q.optionImages && q.optionImages.some(img => img)
+                ? q.optionImages
+                : undefined,
+            correct: q.correct,
+            explanation: q.explanation || '',
+            explanationImage: q.explanationImage || undefined,
           })),
+        })),
       };
+
+      if (testType === 'mock') {
+        payload.stream = stream;
+        payload.sectionTimings = {
+          physicsChemistry: phyChemTime,
+          mathsOrBiology: mathBioTime,
+        };
+      } else {
+        payload.customDuration = customDuration;
+        payload.customSubjects = activeSubjects;
+      }
 
       await api('tests', 'POST', payload);
 
@@ -405,6 +486,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       setSelectedSubjects([]);
       setSections([]);
       setCurrentSection(0);
+      setTestType('mock');
+      setStream('PCM');
+      setPhyChemTime(90);
+      setMathBioTime(90);
+      setCustomDuration(60);
+      setShowAnswerKeyOnCreate(false);
       resetQuestionForm();
 
       alert('Test created! Awaiting admin approval.');
@@ -432,6 +519,21 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       onTestsUpdate(testsData);
     } catch (error: any) {
       alert(error.message || 'Failed to update test');
+    }
+    setActionLoading(null);
+  };
+
+  // ========================
+  // Toggle answer key visibility
+  // ========================
+  const handleToggleAnswerKey = async (testId: string, currentShowAnswerKey: boolean) => {
+    setActionLoading(`answerkey-${testId}`);
+    try {
+      await api(`tests/${testId}`, 'PATCH', { showAnswerKey: !currentShowAnswerKey });
+      const testsData = await api('tests');
+      onTestsUpdate(testsData);
+    } catch (error: any) {
+      alert(error.message || 'Failed to update answer key visibility');
     }
     setActionLoading(null);
   };
@@ -824,6 +926,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       setSelectedSubjects(importedSubjects);
       setSections(newSections);
       setCurrentSection(0);
+      setStream(detectStream(importedSubjects));
 
       const totalImages = newSections.reduce(
         (sum, s) =>
@@ -939,8 +1042,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       ['• Biology = 1 mark/question'],
       [''],
       ['📝 TEST TYPES:'],
-      ['• Single subject → Subject Test'],
-      ['• Multiple subjects → Mock Test'],
+      ['• Mock Test: PCM or PCB with two-phase timing'],
+      ['• Custom Test: Any subjects with single timer'],
       [
         '• For multi-subject Excel: use sheet names Physics, Chemistry, Mathematics, Biology',
       ],
@@ -1424,6 +1527,21 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const currentSubject = sections[currentSection]?.subject || 'physics';
   const currentSubjectInfo = getSubjectInfo(currentSubject);
 
+  // ========================
+  // Helper to format timing display on test cards
+  // ========================
+  const formatTestTiming = (t: Test): string => {
+    if (t.testType === 'mock') {
+      const pc = t.sectionTimings?.physicsChemistry ?? 90;
+      const mb = t.sectionTimings?.mathsOrBiology ?? 90;
+      const phase2Label = t.stream === 'PCB' ? 'Bio' : 'Maths';
+      return `Phy+Chem: ${pc}min → ${phase2Label}: ${mb}min (Total: ${pc + mb}min)`;
+    } else if (t.testType === 'custom') {
+      return `Custom: ${t.customDuration ?? 60}min`;
+    }
+    return '';
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Nav */}
@@ -1488,14 +1606,19 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-xl font-bold">{t.title}</h3>
-                        {t.sections && t.sections.length === 1 && (
-                          <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
-                            Subject Test
+                        {t.testType === 'mock' && (
+                          <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded text-xs font-medium">
+                            Mock Test {t.stream && `(${t.stream})`}
                           </span>
                         )}
-                        {t.sections && t.sections.length > 1 && (
-                          <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded text-xs font-medium">
-                            Mock Test
+                        {t.testType === 'custom' && (
+                          <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+                            Custom Test
+                          </span>
+                        )}
+                        {!t.testType && t.sections && t.sections.length === 1 && (
+                          <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+                            Subject Test
                           </span>
                         )}
                       </div>
@@ -1522,21 +1645,17 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       <p className="text-sm text-gray-500 mt-2">
                         {getTotalQuestions(t)} questions |{' '}
                         {getTotalMarks(t)} marks
-                        {t.totalDuration
-                          ? ` | ${t.totalDuration} min`
-                          : ''}
                       </p>
 
-                      {t.sectionTimings && (
-                        <div className="text-xs text-gray-400 mt-1">
-                          {t.sectionTimings.physicsChemistry &&
-                            `Phy+Chem: ${t.sectionTimings.physicsChemistry} min`}
-                          {t.sectionTimings.maths &&
-                            ` | Maths: ${t.sectionTimings.maths} min`}
+                      {/* Timing info */}
+                      {(t.testType === 'mock' || t.testType === 'custom') && (
+                        <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {formatTestTiming(t)}
                         </div>
                       )}
 
-                      <div className="flex gap-2 mt-3">
+                      <div className="flex gap-2 mt-3 flex-wrap">
                         <span
                           className={`px-3 py-1 rounded text-sm ${
                             t.approved
@@ -1557,28 +1676,77 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                             {t.active ? 'Active' : 'Inactive'}
                           </span>
                         )}
+                        {/* Answer key visibility badge */}
+                        <span
+                          className={`px-3 py-1 rounded text-sm inline-flex items-center gap-1 ${
+                            t.showAnswerKey
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-red-50 text-red-700'
+                          }`}
+                        >
+                          {t.showAnswerKey ? (
+                            <>
+                              <Eye className="w-3 h-3" />
+                              Answer Key Visible
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="w-3 h-3" />
+                              Answer Key Hidden
+                            </>
+                          )}
+                        </span>
                       </div>
                     </div>
 
-                    {t.approved && (
+                    <div className="flex flex-col gap-2 ml-4 shrink-0">
+                      {t.approved && (
+                        <button
+                          disabled={actionLoading === t._id}
+                          onClick={() =>
+                            handleToggleActive(t._id, t.active)
+                          }
+                          className={`px-4 py-2 rounded-lg disabled:opacity-60 whitespace-nowrap text-sm ${
+                            t.active
+                              ? 'bg-red-600 text-white hover:bg-red-700'
+                              : 'bg-green-600 text-white hover:bg-green-700'
+                          }`}
+                        >
+                          {actionLoading === t._id
+                            ? '...'
+                            : t.active
+                            ? 'Deactivate'
+                            : 'Activate'}
+                        </button>
+                      )}
+
+                      {/* Answer key toggle button */}
                       <button
-                        disabled={actionLoading === t._id}
+                        disabled={actionLoading === `answerkey-${t._id}`}
                         onClick={() =>
-                          handleToggleActive(t._id, t.active)
+                          handleToggleAnswerKey(t._id, t.showAnswerKey)
                         }
-                        className={`px-4 py-2 rounded-lg disabled:opacity-60 whitespace-nowrap ml-4 ${
-                          t.active
-                            ? 'bg-red-600 text-white hover:bg-red-700'
-                            : 'bg-green-600 text-white hover:bg-green-700'
+                        className={`px-4 py-2 rounded-lg disabled:opacity-60 whitespace-nowrap text-sm inline-flex items-center gap-1 ${
+                          t.showAnswerKey
+                            ? 'bg-red-100 text-red-700 hover:bg-red-200 border border-red-300'
+                            : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border border-emerald-300'
                         }`}
                       >
-                        {actionLoading === t._id
-                          ? '...'
-                          : t.active
-                          ? 'Deactivate'
-                          : 'Activate'}
+                        {actionLoading === `answerkey-${t._id}` ? (
+                          '...'
+                        ) : t.showAnswerKey ? (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5" />
+                            Hide Answers
+                          </>
+                        ) : (
+                          <>
+                            <Eye className="w-3.5 h-3.5" />
+                            Show Answers
+                          </>
+                        )}
                       </button>
-                    )}
+                    </div>
                   </div>
                 </div>
               ))
@@ -1597,8 +1765,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 📚 Select Subjects
               </h3>
               <p className="text-sm text-indigo-600 mb-3">
-                Choose one or more subjects. Single subject = Subject
-                Test. Multiple = Mock Test.
+                Choose one or more subjects. Use presets for quick PCM/PCB mock tests,
+                or pick any combination for a custom timed test.
                 <br />
                 <span className="text-xs">
                   Maths (2 marks/Q) and Biology (1 mark/Q) are optional
@@ -1677,9 +1845,9 @@ const TeacherView: React.FC<TeacherViewProps> = ({
               {selectedSubjects.length > 0 && (
                 <div className="mt-3 text-sm">
                   <span className="font-medium">
-                    {selectedSubjects.length === 1
-                      ? '📝 Subject Test: '
-                      : '📋 Mock Test: '}
+                    {testType === 'mock'
+                      ? `📋 Mock Test (${stream}): `
+                      : '⚡ Custom Test: '}
                   </span>
                   {selectedSubjects
                     .map(s => getSubjectInfo(s).label)
@@ -1688,25 +1856,213 @@ const TeacherView: React.FC<TeacherViewProps> = ({
               )}
             </div>
 
-            {/* Test info box — only show for multi-subject */}
-            {selectedSubjects.length > 1 && (
-              <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                <h3 className="font-semibold text-yellow-800 mb-1">
-                  ⏱ Mock Test Structure
+            {/* ======================== TEST TYPE & TIMING CONFIG ======================== */}
+            {selectedSubjects.length > 0 && (
+              <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                <h3 className="font-semibold text-amber-800 mb-3 flex items-center gap-2">
+                  <Settings className="w-5 h-5" />
+                  Test Type & Timing
                 </h3>
-                <p className="text-sm text-yellow-700">
-                  <strong>Subjects:</strong>{' '}
-                  {selectedSubjects
-                    .map(s => {
-                      const info = getSubjectInfo(s);
-                      return `${info.label} (${info.marks}m/Q)`;
-                    })
-                    .join(', ')}
-                  <br />
-                  <strong>Note:</strong> Physics & Chemistry = 1
-                  mark/Q | Mathematics = 2 marks/Q | Biology = 1
-                  mark/Q
-                </p>
+
+                {/* Test type selector */}
+                <div className="flex gap-3 mb-4">
+                  {isMockEligible() && (
+                    <button
+                      onClick={() => setTestType('mock')}
+                      className={`flex-1 p-4 rounded-lg border-2 text-left transition ${
+                        testType === 'mock'
+                          ? 'border-violet-500 bg-violet-50 ring-2 ring-violet-200'
+                          : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="font-semibold text-sm flex items-center gap-2">
+                        <Clock className="w-4 h-4" />
+                        Mock Test
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Two-phase timing: Phy+Chem → then Maths/Bio.
+                        <br />
+                        Phase 1 auto-submits, no going back.
+                      </p>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setTestType('custom')}
+                    className={`flex-1 p-4 rounded-lg border-2 text-left transition ${
+                      testType === 'custom'
+                        ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="font-semibold text-sm flex items-center gap-2">
+                      <Clock className="w-4 h-4" />
+                      Custom Timed Test
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Single timer for all subjects.
+                      <br />
+                      Students can switch between subjects freely.
+                    </p>
+                  </button>
+                </div>
+
+                {/* Mock test timing config */}
+                {testType === 'mock' && isMockEligible() && (
+                  <div className="bg-white rounded-lg border p-4">
+                    <h4 className="font-medium text-sm text-gray-700 mb-3">
+                      ⏱ Mock Test Timing Configuration
+                    </h4>
+
+                    {/* Stream selector */}
+                    {selectedSubjects.includes('maths') && selectedSubjects.includes('biology') && (
+                      <div className="mb-3">
+                        <label className="text-xs font-medium text-gray-600 block mb-1">
+                          Stream
+                        </label>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setStream('PCM')}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                              stream === 'PCM'
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            PCM (Physics, Chemistry, Maths)
+                          </button>
+                          <button
+                            onClick={() => setStream('PCB')}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                              stream === 'PCB'
+                                ? 'bg-orange-600 text-white'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            PCB (Physics, Chemistry, Biology)
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">
+                          Phase 1: Physics + Chemistry (minutes)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={300}
+                          value={phyChemTime}
+                          onChange={e => setPhyChemTime(Math.max(1, parseInt(e.target.value) || 90))}
+                          className="w-full px-4 py-2 border rounded-lg"
+                        />
+                        <p className="text-xs text-gray-400 mt-1">
+                          Auto-submits when time expires. Students can submit early.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">
+                          Phase 2: {stream === 'PCB' ? 'Biology' : 'Mathematics'} (minutes)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={300}
+                          value={mathBioTime}
+                          onChange={e => setMathBioTime(Math.max(1, parseInt(e.target.value) || 90))}
+                          className="w-full px-4 py-2 border rounded-lg"
+                        />
+                        <p className="text-xs text-gray-400 mt-1">
+                          Starts after Phase 1 is submitted. Cannot go back.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 p-3 bg-violet-50 rounded border border-violet-200">
+                      <p className="text-sm text-violet-800">
+                        <strong>Total Duration:</strong> {phyChemTime + mathBioTime} minutes
+                        <br />
+                        <span className="text-xs">
+                          Phase 1 ({phyChemTime}min): Physics + Chemistry → auto-submit →
+                          Phase 2 ({mathBioTime}min): {stream === 'PCB' ? 'Biology' : 'Mathematics'}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Custom test timing config */}
+                {testType === 'custom' && (
+                  <div className="bg-white rounded-lg border p-4">
+                    <h4 className="font-medium text-sm text-gray-700 mb-3">
+                      ⏱ Custom Test Duration
+                    </h4>
+                    <div>
+                      <label className="text-xs font-medium text-gray-600 block mb-1">
+                        Total Duration (minutes)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={600}
+                        value={customDuration}
+                        onChange={e => setCustomDuration(Math.max(1, parseInt(e.target.value) || 60))}
+                        className="w-full px-4 py-2 border rounded-lg"
+                      />
+                      <p className="text-xs text-gray-400 mt-1">
+                        Single timer for all subjects. Students can freely switch between subjects.
+                      </p>
+                    </div>
+
+                    <div className="mt-3 p-3 bg-indigo-50 rounded border border-indigo-200">
+                      <p className="text-sm text-indigo-800">
+                        <strong>Subjects:</strong>{' '}
+                        {selectedSubjects.map(s => getSubjectInfo(s).label).join(', ')}
+                        <br />
+                        <strong>Duration:</strong> {customDuration} minutes total
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Answer key visibility setting */}
+                <div className="mt-4 bg-white rounded-lg border p-4">
+                  <h4 className="font-medium text-sm text-gray-700 mb-2 flex items-center gap-2">
+                    {showAnswerKeyOnCreate ? (
+                      <Eye className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <EyeOff className="w-4 h-4 text-red-500" />
+                    )}
+                    Answer Key & Explanations
+                  </h4>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setShowAnswerKeyOnCreate(!showAnswerKeyOnCreate)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        showAnswerKeyOnCreate ? 'bg-emerald-500' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          showAnswerKeyOnCreate ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                    <div>
+                      <p className="text-sm font-medium">
+                        {showAnswerKeyOnCreate
+                          ? 'Answer key visible to students immediately'
+                          : 'Answer key hidden from students'}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {showAnswerKeyOnCreate
+                          ? 'Students will see correct answers and explanations after submitting.'
+                          : 'Students will only see their score. You can enable answer key later from the Tests tab.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1716,7 +2072,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 <h3 className="font-bold mb-2 flex items-center gap-2">
                   <Upload className="w-5 h-5" />
                   {selectedSubjects.length > 1
-                    ? 'Quick Import Full Mock Test'
+                    ? 'Quick Import Full Test'
                     : 'Quick Import Questions'}
                 </h3>
 
@@ -2328,8 +2684,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   Select subjects above to start adding questions
                 </p>
                 <p className="text-gray-400 text-sm mt-1">
-                  You can create a single-subject test or
-                  multi-subject mock test
+                  You can create a mock test (PCM/PCB) or a custom timed test
                 </p>
               </div>
             )}
@@ -2376,10 +2731,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   })}
                 </div>
                 <div className="mt-2 text-sm font-semibold border-t pt-2">
-                  {sections.length === 1
-                    ? '📝 Subject Test'
-                    : '📋 Mock Test'}{' '}
-                  — Total:{' '}
+                  {testType === 'mock' ? (
+                    <span>📋 Mock Test ({stream})</span>
+                  ) : (
+                    <span>⚡ Custom Test</span>
+                  )}
+                  {' — Total: '}
                   {sections.reduce(
                     (sum, s) => sum + s.questions.length,
                     0
@@ -2392,7 +2749,23 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         getMarksPerQuestion(s.subject),
                     0
                   )}{' '}
-                  marks
+                  marks |{' '}
+                  {testType === 'mock'
+                    ? `${phyChemTime + mathBioTime} min`
+                    : `${customDuration} min`}
+                </div>
+                <div className="mt-1 text-xs text-gray-500 flex items-center gap-1">
+                  {showAnswerKeyOnCreate ? (
+                    <>
+                      <Eye className="w-3 h-3 text-emerald-600" />
+                      Answer key will be visible to students
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="w-3 h-3 text-red-500" />
+                      Answer key hidden until you enable it
+                    </>
+                  )}
                 </div>
               </div>
             )}

@@ -54,12 +54,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const submissions = await withRetry(() =>
         TestSubmission.find(query)
-          .populate("testId", "title sections sectionTimings totalDuration")
+          .populate("testId", "title sections sectionTimings testType stream customDuration showAnswerKey")
           .populate("studentId", "name email")
           .sort({ submittedAt: -1 })
           .limit(maxResults)
           .lean()
       );
+
+      // If student, strip answer details when answer key is hidden
+      if (currentUser.role === "student") {
+        const processed = submissions.map((sub: any) => {
+          const test = sub.testId;
+          const showAnswerKey = test?.showAnswerKey ?? false;
+
+          if (showAnswerKey) {
+            // Full data — include canViewAnswerKey flag
+            return { ...sub, canViewAnswerKey: true };
+          }
+
+          // Strip correct answers, explanations, and per-question details
+          return {
+            ...sub,
+            canViewAnswerKey: false,
+            sectionResults: sub.sectionResults?.map((sr: any) => ({
+              subject: sr.subject,
+              score: sr.score,
+              maxScore: sr.maxScore,
+              marksPerQuestion: sr.marksPerQuestion,
+              correctCount: sr.correctCount,
+              incorrectCount: sr.incorrectCount,
+              unansweredCount: sr.unansweredCount,
+              // Strip detailed question data — student only sees aggregate scores
+              questions: [],
+            })),
+          };
+        });
+        return res.status(200).json(processed);
+      }
 
       return res.status(200).json(submissions);
     }
@@ -86,7 +117,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         Promise.all([
           TestSubmission.findOne({ testId: testOid, studentId: studentOid })
             .select("_id").lean(),
-          Test.findById(testId).lean(),
+          Test.findById(testOid).lean(),
         ])
       );
 
@@ -103,37 +134,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let totalMaxScore = 0;
       const sectionResults: any[] = [];
 
-      for (const section of test.sections) {
+      for (const section of (test as any).sections) {
         const marksPerQuestion =
           section.marksPerQuestion || (section.subject === "maths" ? 2 : 1);
-        let sectionScore = 0;
+
         const questions = section.questions || [];
         const sectionMaxScore = questions.length * marksPerQuestion;
+
+        let sectionScore = 0;
+        let correctCount = 0;
+        let incorrectCount = 0;
+        let unansweredCount = 0;
         const questionResults: any[] = [];
 
         for (let i = 0; i < questions.length; i++) {
           const question = questions[i];
           const questionKey = `${section.subject}_${i}`;
+          const rawAnswer = answers[questionKey];
           const studentAnswer =
-            answers[questionKey] !== undefined && answers[questionKey] !== null
-              ? Number(answers[questionKey])
+            rawAnswer !== undefined && rawAnswer !== null
+              ? Number(rawAnswer)
               : null;
+
           const isCorrect =
             studentAnswer !== null && studentAnswer === question.correct;
 
-          if (isCorrect) {
+          const marksAwarded = isCorrect ? marksPerQuestion : 0;
+
+          if (studentAnswer === null) {
+            unansweredCount++;
+          } else if (isCorrect) {
+            correctCount++;
             sectionScore += marksPerQuestion;
+          } else {
+            incorrectCount++;
           }
 
           questionResults.push({
             questionIndex: i,
-            question: question.question,
-            options: question.options,
+            question: question.question || "",
+            questionImage: question.questionImage || "",
+            options: question.options || [],
+            optionImages: question.optionImages?.length ? question.optionImages : [],
             correctAnswer: question.correct,
             studentAnswer,
             isCorrect,
             explanation: question.explanation || "",
-            marksAwarded: isCorrect ? marksPerQuestion : 0,
+            explanationImage: question.explanationImage || "",
+            marksAwarded,
             marksPerQuestion,
           });
         }
@@ -146,6 +194,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           score: sectionScore,
           maxScore: sectionMaxScore,
           marksPerQuestion,
+          correctCount,
+          incorrectCount,
+          unansweredCount,
           questions: questionResults,
         });
       }
@@ -166,21 +217,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
       );
 
-      return res.status(201).json({
+      // Return response — strip answer details if answer key is hidden
+      const showAnswerKey = (test as any).showAnswerKey ?? false;
+
+      const responseData: any = {
         _id: submission._id,
         testId: submission.testId,
         studentId: submission.studentId,
-        sectionResults: submission.sectionResults,
         totalScore: submission.totalScore,
         totalMaxScore: submission.totalMaxScore,
         percentage: submission.percentage,
         submittedAt: submission.submittedAt,
-      });
+        canViewAnswerKey: showAnswerKey,
+      };
+
+      if (showAnswerKey) {
+        // Include full section results with answers and explanations
+        responseData.sectionResults = submission.sectionResults;
+      } else {
+        // Only include aggregate scores, no question details
+        responseData.sectionResults = submission.sectionResults.map((sr: any) => ({
+          subject: sr.subject,
+          score: sr.score,
+          maxScore: sr.maxScore,
+          marksPerQuestion: sr.marksPerQuestion,
+          correctCount: sr.correctCount,
+          incorrectCount: sr.incorrectCount,
+          unansweredCount: sr.unansweredCount,
+          questions: [],
+        }));
+      }
+
+      return res.status(201).json(responseData);
     }
 
     return res.status(405).json({ message: "Method not allowed" });
   } catch (error: any) {
-    console.error("attempts error:", error.message);
-    return res.status(500).json({ message: error.message });
+    console.error("Submissions API error:", error.message);
+    return res.status(500).json({ message: error.message || "Internal server error" });
   }
 }

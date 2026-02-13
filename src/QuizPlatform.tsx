@@ -8,6 +8,16 @@ import TeacherView from './views/TeacherView';
 import StudentView from './views/StudentView';
 import TakingTestView from './views/TakingTestView';
 
+const getSubjectLabel = (subject: string): string => {
+  switch (subject) {
+    case 'physics': return 'Physics';
+    case 'chemistry': return 'Chemistry';
+    case 'maths': return 'Mathematics';
+    case 'biology': return 'Biology';
+    default: return subject;
+  }
+};
+
 const QuizPlatform: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -59,7 +69,7 @@ const QuizPlatform: React.FC = () => {
       const [testsData, materialsData, attemptsData] = await Promise.all([
         api("tests"),
         api("materials"),
-        api("attempts"),
+        api("submissions"),
       ]);
 
       setTests(testsData);
@@ -87,7 +97,7 @@ const QuizPlatform: React.FC = () => {
     if (!currentTest || !user) return;
 
     try {
-      const res = await api("attempts", "POST", {
+      const res = await api("submissions", "POST", {
         testId: currentTest._id,
         answers: testAnswers,
       });
@@ -96,7 +106,27 @@ const QuizPlatform: React.FC = () => {
       const totalMaxScore = res.totalMaxScore ?? 0;
       const percentage = res.percentage ?? 0;
 
-      alert(`Test submitted! Score: ${totalScore}/${totalMaxScore} (${percentage}%)`);
+      // Build section-wise score summary
+      const sectionSummary = res.sectionResults
+        ?.map((sr: any) =>
+          `${getSubjectLabel(sr.subject)}: ${sr.score}/${sr.maxScore}`
+        )
+        .join(' | ') || '';
+
+      const canViewAnswerKey = res.canViewAnswerKey ?? false;
+
+      let message = `✅ Test submitted!\n\n`;
+      message += `📊 Total Score: ${totalScore}/${totalMaxScore} (${percentage}%)\n`;
+      if (sectionSummary) {
+        message += `\n📋 Section Scores:\n${sectionSummary}\n`;
+      }
+      if (!canViewAnswerKey) {
+        message += `\n🔒 Answer key and explanations will be available once your teacher releases them.`;
+      } else {
+        message += `\n✅ You can view correct answers and explanations in the Results tab.`;
+      }
+
+      alert(message);
 
       // Clear test state and redirect to results
       setCurrentTest(null);
@@ -105,7 +135,7 @@ const QuizPlatform: React.FC = () => {
 
       // Refresh submissions
       try {
-        const attemptsData = await api("attempts");
+        const attemptsData = await api("submissions");
         setAttempts(Array.isArray(attemptsData) ? attemptsData : []);
       } catch {
         console.warn("Could not refresh submissions");
@@ -128,6 +158,7 @@ const QuizPlatform: React.FC = () => {
     setCourses([]);
     setView('login');
     setCurrentTest(null);
+    setStudentActiveTab('tests');
 
     // Re-fetch courses for login page
     api("courses").then(setCourses).catch(console.error);
@@ -137,6 +168,37 @@ const QuizPlatform: React.FC = () => {
   // Start test
   // ========================
   const startTest = (test: Test) => {
+    // Confirm before starting
+    const testType = test.testType || 'custom';
+    let confirmMsg = `Are you sure you want to start "${test.title}"?\n\n`;
+
+    if (testType === 'mock') {
+      const pc = test.sectionTimings?.physicsChemistry ?? 90;
+      const mb = test.sectionTimings?.mathsOrBiology ?? 90;
+      const phase2Label = test.stream === 'PCB' ? 'Biology' : 'Mathematics';
+
+      confirmMsg += `📋 Mock Test (${test.stream || 'PCM'})\n`;
+      confirmMsg += `⏱ Phase 1: Physics + Chemistry — ${pc} minutes\n`;
+      confirmMsg += `⏱ Phase 2: ${phase2Label} — ${mb} minutes\n`;
+      confirmMsg += `⏱ Total: ${pc + mb} minutes\n\n`;
+      confirmMsg += `⚠️ Important:\n`;
+      confirmMsg += `• Physics & Chemistry will auto-submit when their time expires\n`;
+      confirmMsg += `• You can submit Phase 1 early to move to ${phase2Label}\n`;
+      confirmMsg += `• Once you move to ${phase2Label}, you CANNOT go back\n`;
+    } else {
+      const duration = test.customDuration ?? 60;
+      const subjects = test.sections?.map(s => getSubjectLabel(s.subject)).join(', ') || '';
+
+      confirmMsg += `⚡ Custom Test\n`;
+      confirmMsg += `📚 Subjects: ${subjects}\n`;
+      confirmMsg += `⏱ Duration: ${duration} minutes\n\n`;
+      confirmMsg += `You can switch between subjects freely during the test.\n`;
+    }
+
+    confirmMsg += `\nOnce started, the timer cannot be paused.`;
+
+    if (!confirm(confirmMsg)) return;
+
     setCurrentTest(test);
     setView('taking-test');
   };
@@ -219,7 +281,7 @@ const QuizPlatform: React.FC = () => {
           test={currentTest}
           onSubmit={handleTestSubmit}
           onBack={() => {
-            if (confirm('Are you sure? Your progress will be lost.')) {
+            if (confirm('Are you sure you want to leave? Your progress will be lost.')) {
               setCurrentTest(null);
               setView('student');
             }

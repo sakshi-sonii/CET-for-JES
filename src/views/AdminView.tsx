@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { Award, LogOut } from 'lucide-react'
-import type { User, Test, Course, TestSubmission } from '../types'
+import { Award, LogOut, Eye, EyeOff, Clock} from 'lucide-react'
+import type { User, Test, Course, TestSubmission, SubjectKey } from '../types'
 import { api } from '../api'
 
 interface AdminViewProps {
@@ -13,6 +13,21 @@ interface AdminViewProps {
   onUsersUpdate: (users: User[]) => void
   onTestsUpdate: (tests: Test[]) => void
   onCoursesUpdate: (courses: Course[]) => void
+}
+
+const ALL_SUBJECTS: { key: SubjectKey; label: string; color: string; borderTop: string; badge: string }[] = [
+  { key: 'physics', label: 'Physics', color: 'text-blue-700', borderTop: 'border-blue-500', badge: 'bg-blue-100 text-blue-800' },
+  { key: 'chemistry', label: 'Chemistry', color: 'text-green-700', borderTop: 'border-green-500', badge: 'bg-green-100 text-green-800' },
+  { key: 'maths', label: 'Mathematics', color: 'text-purple-700', borderTop: 'border-purple-500', badge: 'bg-purple-100 text-purple-800' },
+  { key: 'biology', label: 'Biology', color: 'text-orange-700', borderTop: 'border-orange-500', badge: 'bg-orange-100 text-orange-800' },
+]
+
+const getSubjectInfo = (key: string) => ALL_SUBJECTS.find(s => s.key === key) || ALL_SUBJECTS[0]
+const getSubjectLabel = (key: string) => getSubjectInfo(key).label
+
+const getMarksPerQuestion = (subject: string, section?: any): number => {
+  if (section?.marksPerQuestion) return section.marksPerQuestion
+  return subject === 'maths' ? 2 : 1
 }
 
 const AdminView: React.FC<AdminViewProps> = ({
@@ -57,9 +72,34 @@ const AdminView: React.FC<AdminViewProps> = ({
     if (!test?.sections) return 0
     return test.sections.reduce((sum, s) => {
       if (!s) return sum
-      const marks = s.marksPerQuestion || (s.subject === 'maths' ? 2 : 1)
+      const marks = getMarksPerQuestion(s.subject, s)
       return sum + (s.questions?.length || 0) * marks
     }, 0)
+  }
+
+  const getTotalDuration = (test: Test): number => {
+    if (test.testType === 'mock') {
+      const pc = test.sectionTimings?.physicsChemistry ?? 90
+      const mb = test.sectionTimings?.mathsOrBiology ?? 90
+      return pc + mb
+    }
+    if (test.testType === 'custom') {
+      return test.customDuration ?? 60
+    }
+    return 180
+  }
+
+  const getTimingDescription = (test: Test): string => {
+    if (test.testType === 'mock') {
+      const pc = test.sectionTimings?.physicsChemistry ?? 90
+      const mb = test.sectionTimings?.mathsOrBiology ?? 90
+      const phase2Label = test.stream === 'PCB' ? 'Bio' : 'Maths'
+      return `Phy+Chem: ${pc}min → ${phase2Label}: ${mb}min`
+    }
+    if (test.testType === 'custom') {
+      return `Custom: ${test.customDuration ?? 60}min`
+    }
+    return ''
   }
 
   // ========================
@@ -106,6 +146,27 @@ const AdminView: React.FC<AdminViewProps> = ({
   const getStudentId = (submission: TestSubmission): string => {
     if (!submission) return ''
     return safeGetId(submission.studentId)
+  }
+
+  const getTestFromSubmission = (submission: TestSubmission): Test | undefined => {
+    const rawTestId: any = submission.testId
+    if (typeof rawTestId === 'object' && rawTestId?._id) return rawTestId as Test
+    const testIdStr = typeof rawTestId === 'string' ? rawTestId : rawTestId?._id
+    return tests.find(t => t && t._id === testIdStr)
+  }
+
+  // Get all unique subjects present in a list of submissions
+  const getUniqueSubjects = (submissions: TestSubmission[]): SubjectKey[] => {
+    const subjectSet = new Set<SubjectKey>()
+    submissions.forEach(sub => {
+      sub.sectionResults?.forEach(sr => {
+        if (sr?.subject) subjectSet.add(sr.subject as SubjectKey)
+      })
+    })
+    // Return in canonical order
+    return ALL_SUBJECTS
+      .map(s => s.key)
+      .filter(k => subjectSet.has(k))
   }
 
   // ========================
@@ -163,6 +224,18 @@ const AdminView: React.FC<AdminViewProps> = ({
     setActionLoading(null)
   }
 
+  const handleToggleAnswerKey = async (testId: string, currentShowAnswerKey: boolean) => {
+    setActionLoading(`answerkey-${testId}`)
+    try {
+      await api(`tests/${testId}`, 'PATCH', { showAnswerKey: !currentShowAnswerKey })
+      const testsData = await api('tests')
+      onTestsUpdate(testsData)
+    } catch (error: any) {
+      alert(error.message || 'Failed to update answer key visibility')
+    }
+    setActionLoading(null)
+  }
+
   const addCourse = async (name: string, description: string) => {
     try {
       await api('courses', 'POST', { name, description })
@@ -174,12 +247,7 @@ const AdminView: React.FC<AdminViewProps> = ({
   }
 
   const getSectionBadgeColor = (subject: string) => {
-    switch (subject) {
-      case 'physics': return 'bg-blue-100 text-blue-800'
-      case 'chemistry': return 'bg-green-100 text-green-800'
-      case 'maths': return 'bg-purple-100 text-purple-800'
-      default: return 'bg-gray-100 text-gray-800'
-    }
+    return getSubjectInfo(subject).badge
   }
 
   const getRankBadge = (rank: number) => {
@@ -195,8 +263,33 @@ const AdminView: React.FC<AdminViewProps> = ({
     return 'text-red-600'
   }
 
+  const getTestTypeBadge = (test: Test) => {
+    if (test.testType === 'mock') {
+      return (
+        <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded text-xs font-medium">
+          Mock {test.stream && `(${test.stream})`}
+        </span>
+      )
+    }
+    if (test.testType === 'custom') {
+      return (
+        <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+          Custom
+        </span>
+      )
+    }
+    if (test.sections && test.sections.length === 1) {
+      return (
+        <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+          Subject
+        </span>
+      )
+    }
+    return null
+  }
+
   // ========================
-  // RANKINGS COMPUTATION (with null safety)
+  // RANKINGS COMPUTATION
   // ========================
   const filteredSubmissions = rankingsTestFilter === 'all'
     ? validAttempts
@@ -212,6 +305,9 @@ const AdminView: React.FC<AdminViewProps> = ({
     return new Date(a?.submittedAt || 0).getTime() - new Date(b?.submittedAt || 0).getTime()
   })
 
+  // Get unique subjects in filtered submissions for dynamic columns
+  const rankingSubjects = getUniqueSubjects(sortedSubmissions)
+
   const getOverallRankings = () => {
     const studentMap: Record<string, {
       name: string
@@ -223,7 +319,6 @@ const AdminView: React.FC<AdminViewProps> = ({
 
     validAttempts.forEach(a => {
       if (!a) return
-
       const studentId = getStudentId(a)
       if (!studentId) return
 
@@ -254,6 +349,9 @@ const AdminView: React.FC<AdminViewProps> = ({
   }
 
   const overallRankings = getOverallRankings()
+
+  // Get unique subjects present across all valid attempts for top performers
+  const allSubjectsInAttempts = getUniqueSubjects(validAttempts)
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -360,18 +458,18 @@ const AdminView: React.FC<AdminViewProps> = ({
                 <div className="mt-3">
                   <button onClick={async () => {
                     try {
-                      const payload: any = { email: newUserForm.email, password: newUserForm.password, name: newUserForm.name, role: newUserForm.role };
-                      if (newUserForm.course) payload.course = newUserForm.course;
-                      payload.approved = newUserForm.approved;
-                      setActionLoading('create-user');
-                      await api('users', 'POST', payload);
-                      const usersData = await api('users');
-                      onUsersUpdate(usersData);
-                      setNewUserForm({ email: '', password: '', name: '', role: 'student', course: '', approved: false });
-                      alert('User created');
+                      const payload: any = { email: newUserForm.email, password: newUserForm.password, name: newUserForm.name, role: newUserForm.role }
+                      if (newUserForm.course) payload.course = newUserForm.course
+                      payload.approved = newUserForm.approved
+                      setActionLoading('create-user')
+                      await api('users', 'POST', payload)
+                      const usersData = await api('users')
+                      onUsersUpdate(usersData)
+                      setNewUserForm({ email: '', password: '', name: '', role: 'student', course: '', approved: false })
+                      alert('User created')
                     } catch (error: any) {
-                      alert(error.message || 'Failed to create user');
-                    } finally { setActionLoading(null); }
+                      alert(error.message || 'Failed to create user')
+                    } finally { setActionLoading(null) }
                   }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">
                     {actionLoading === 'create-user' ? '...' : 'Create User'}
                   </button>
@@ -393,10 +491,10 @@ const AdminView: React.FC<AdminViewProps> = ({
                         <button disabled={actionLoading === u._id} onClick={() => approveTeacher(u._id)} className="px-3 py-1 bg-green-600 text-white rounded">Approve</button>
                       )}
                       <button disabled={actionLoading === u._id} onClick={async () => {
-                        if (!confirm('Delete user?')) return;
-                        setActionLoading(u._id);
-                        try { await api(`users/${u._id}`, 'DELETE'); const usersData = await api('users'); onUsersUpdate(usersData); } catch (error: any) { alert(error.message || 'Failed'); }
-                        setActionLoading(null);
+                        if (!confirm('Delete user?')) return
+                        setActionLoading(u._id)
+                        try { await api(`users/${u._id}`, 'DELETE'); const usersData = await api('users'); onUsersUpdate(usersData) } catch (error: any) { alert(error.message || 'Failed') }
+                        setActionLoading(null)
                       }} className="px-3 py-1 bg-red-600 text-white rounded">Delete</button>
                     </div>
                   </div>
@@ -417,26 +515,45 @@ const AdminView: React.FC<AdminViewProps> = ({
                 <div className="space-y-3">
                   {pendingTests.map((t) => {
                     if (!t) return null
-                    const teacher = users.find((u) => u && u._id === t.teacherId)
+                    const teacher = users.find((u) => u && safeGetId(u) === safeGetId(t.teacherId))
                     const isExpanded = expandedTest === t._id
                     return (
                       <div key={t._id} className="p-4 border rounded-lg">
                         <div className="flex justify-between items-start mb-3">
                           <div className="flex-1">
-                            <p className="font-bold text-lg">{t.title}</p>
-                            <p className="text-sm text-gray-600 mb-2">By: {teacher?.name || 'Unknown'} | Total: {t.totalDuration || 180} min</p>
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              <p className="font-bold text-lg">{t.title}</p>
+                              {getTestTypeBadge(t)}
+                            </div>
+                            <p className="text-sm text-gray-600 mb-2">
+                              By: {teacher?.name || 'Unknown'} | {getTotalDuration(t)} min total
+                            </p>
                             <div className="flex flex-wrap gap-2 mb-2">
                               {t.sections?.map((section) => section && (
                                 <span key={section.subject} className={`px-3 py-1 rounded-full text-xs font-medium ${getSectionBadgeColor(section.subject)}`}>
-                                  {section.subject.charAt(0).toUpperCase() + section.subject.slice(1)}: {section.questions?.length || 0}Q × {section.marksPerQuestion || (section.subject === 'maths' ? 2 : 1)}m
+                                  {getSubjectLabel(section.subject)}: {section.questions?.length || 0}Q × {getMarksPerQuestion(section.subject, section)}m
                                 </span>
                               ))}
                             </div>
-                            <div className="text-xs text-gray-500">
-                              ⏱ Phy+Chem: {t.sectionTimings?.physicsChemistry || 90} min | Maths: {t.sectionTimings?.maths || 90} min | 📊 {getTotalQuestions(t)}Q, {getTotalMarks(t)} marks
+                            <div className="text-xs text-gray-500 flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {getTimingDescription(t)} | 📊 {getTotalQuestions(t)}Q, {getTotalMarks(t)} marks
+                            </div>
+
+                            {/* Answer key status */}
+                            <div className="mt-2 flex items-center gap-1 text-xs">
+                              {t.showAnswerKey ? (
+                                <span className="text-emerald-600 flex items-center gap-1">
+                                  <Eye className="w-3 h-3" /> Answer key visible to students
+                                </span>
+                              ) : (
+                                <span className="text-red-500 flex items-center gap-1">
+                                  <EyeOff className="w-3 h-3" /> Answer key hidden
+                                </span>
+                              )}
                             </div>
                           </div>
-                          <div className="flex gap-2 ml-4">
+                          <div className="flex gap-2 ml-4 shrink-0">
                             <button onClick={() => setExpandedTest(isExpanded ? null : t._id)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm">
                               {isExpanded ? 'Hide' : 'Preview'}
                             </button>
@@ -452,17 +569,23 @@ const AdminView: React.FC<AdminViewProps> = ({
                           <div className="mt-4 border-t pt-4">
                             {t.sections.map((section) => section && (
                               <div key={section.subject} className="mb-4">
-                                <h4 className={`font-semibold text-sm uppercase tracking-wide mb-2 ${section.subject === 'physics' ? 'text-blue-700' : section.subject === 'chemistry' ? 'text-green-700' : 'text-purple-700'}`}>
-                                  {section.subject} ({section.questions?.length || 0}Q)
+                                <h4 className={`font-semibold text-sm uppercase tracking-wide mb-2 ${getSubjectInfo(section.subject).color}`}>
+                                  {getSubjectLabel(section.subject)} ({section.questions?.length || 0}Q × {getMarksPerQuestion(section.subject, section)}m)
                                 </h4>
                                 <div className="space-y-2 pl-4">
                                   {section.questions?.map((q, qIdx) => q && (
                                     <div key={qIdx} className="text-sm border-l-2 border-gray-200 pl-3 py-1">
-                                      <p className="font-medium text-gray-800">Q{qIdx + 1}. {q.question}</p>
+                                      <p className="font-medium text-gray-800">
+                                        Q{qIdx + 1}. {q.question}
+                                        {!q.question && q.questionImage && <span className="text-gray-400 italic">(Image question)</span>}
+                                      </p>
+                                      {q.questionImage && (
+                                        <img src={q.questionImage} alt="Question" className="mt-1 max-h-24 rounded border" />
+                                      )}
                                       <div className="flex flex-wrap gap-3 mt-1 text-gray-600">
                                         {q.options?.map((opt, optIdx) => (
                                           <span key={optIdx} className={optIdx === q.correct ? 'text-green-700 font-semibold' : ''}>
-                                            {String.fromCharCode(65 + optIdx)}. {opt}{optIdx === q.correct && ' ✓'}
+                                            {String.fromCharCode(65 + optIdx)}. {opt || (q.optionImages?.[optIdx] ? '(image)' : '(empty)')}{optIdx === q.correct && ' ✓'}
                                           </span>
                                         ))}
                                       </div>
@@ -485,27 +608,67 @@ const AdminView: React.FC<AdminViewProps> = ({
               <h2 className="text-xl font-bold mb-4">All Tests ({tests.length})</h2>
               <div className="space-y-2">
                 {tests.filter(t => t).map((t) => {
-                  const teacher = users.find((u) => u && u._id === t.teacherId)
+                  const teacher = users.find((u) => u && safeGetId(u) === safeGetId(t.teacherId))
                   return (
-                    <div key={t._id} className="flex justify-between items-center p-3 border rounded">
-                      <div>
-                        <p className="font-medium">{t.title}</p>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {t.sections?.map((s) => s && (
-                            <span key={s.subject} className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(s.subject)}`}>
-                              {s.subject}: {s.questions?.length || 0}Q
-                            </span>
-                          ))}
+                    <div key={t._id} className="p-4 border rounded-lg">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-medium">{t.title}</p>
+                            {getTestTypeBadge(t)}
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {t.sections?.map((s) => s && (
+                              <span key={s.subject} className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(s.subject)}`}>
+                                {getSubjectLabel(s.subject)}: {s.questions?.length || 0}Q
+                              </span>
+                            ))}
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            By: {teacher?.name || 'Unknown'} | {getTotalMarks(t)} marks | {getTotalDuration(t)} min
+                          </p>
+                          {(t.testType === 'mock' || t.testType === 'custom') && (
+                            <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {getTimingDescription(t)}
+                            </p>
+                          )}
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">By: {teacher?.name || 'Unknown'} | {getTotalMarks(t)} marks</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-3 py-1 rounded text-xs font-medium ${t.approved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                          {t.approved ? 'Approved' : 'Pending'}
-                        </span>
-                        <span className={`px-3 py-1 rounded text-xs font-medium ${t.active ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
-                          {t.active ? 'Active' : 'Inactive'}
-                        </span>
+                        <div className="flex flex-col gap-2 items-end ml-4 shrink-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`px-3 py-1 rounded text-xs font-medium ${t.approved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                              {t.approved ? 'Approved' : 'Pending'}
+                            </span>
+                            <span className={`px-3 py-1 rounded text-xs font-medium ${t.active ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}`}>
+                              {t.active ? 'Active' : 'Inactive'}
+                            </span>
+                          </div>
+
+                          {/* Answer key toggle */}
+                          <button
+                            disabled={actionLoading === `answerkey-${t._id}`}
+                            onClick={() => handleToggleAnswerKey(t._id, t.showAnswerKey)}
+                            className={`px-3 py-1 rounded text-xs font-medium inline-flex items-center gap-1 disabled:opacity-60 ${
+                              t.showAnswerKey
+                                ? 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                            }`}
+                          >
+                            {actionLoading === `answerkey-${t._id}` ? (
+                              '...'
+                            ) : t.showAnswerKey ? (
+                              <>
+                                <EyeOff className="w-3 h-3" />
+                                Hide Answers
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3 h-3" />
+                                Show Answers
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )
@@ -522,7 +685,7 @@ const AdminView: React.FC<AdminViewProps> = ({
             <div className="mb-6 space-y-3">
               <input type="text" placeholder="Course Name" value={courseForm.name} onChange={(e) => setCourseForm({ ...courseForm, name: e.target.value })} className="w-full px-4 py-2 border rounded-lg" />
               <textarea placeholder="Description" value={courseForm.description} onChange={(e) => setCourseForm({ ...courseForm, description: e.target.value })} className="w-full px-4 py-2 border rounded-lg" rows={3} />
-              <button onClick={() => { if (courseForm.name) { addCourse(courseForm.name, courseForm.description); setCourseForm({ name: '', description: '' }); } }} className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+              <button onClick={() => { if (courseForm.name) { addCourse(courseForm.name, courseForm.description); setCourseForm({ name: '', description: '' }) } }} className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
                 Add Course
               </button>
             </div>
@@ -575,14 +738,18 @@ const AdminView: React.FC<AdminViewProps> = ({
               )}
             </div>
 
-            {/* Per-Test Rankings */}
+            {/* Per-Test Rankings with Dynamic Subject Columns */}
             <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
                 <h2 className="text-xl font-bold">📊 Test-wise Rankings</h2>
                 <select value={rankingsTestFilter} onChange={(e) => setRankingsTestFilter(e.target.value)} className="px-4 py-2 border rounded-lg text-sm">
                   <option value="all">All Tests</option>
                   {tests.filter(t => t && t.approved).map(t => (
-                    <option key={t._id} value={t._id}>{t.title}</option>
+                    <option key={t._id} value={t._id}>
+                      {t.title}
+                      {t.testType === 'mock' && t.stream ? ` (${t.stream})` : ''}
+                      {t.testType === 'custom' ? ' (Custom)' : ''}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -597,9 +764,11 @@ const AdminView: React.FC<AdminViewProps> = ({
                         <th className="pb-3 pr-4 font-semibold text-gray-600">Rank</th>
                         <th className="pb-3 pr-4 font-semibold text-gray-600">Student</th>
                         <th className="pb-3 pr-4 font-semibold text-gray-600">Test</th>
-                        <th className="pb-3 pr-4 font-semibold text-gray-600 text-center">Physics</th>
-                        <th className="pb-3 pr-4 font-semibold text-gray-600 text-center">Chemistry</th>
-                        <th className="pb-3 pr-4 font-semibold text-gray-600 text-center">Maths</th>
+                        {rankingSubjects.map(subject => (
+                          <th key={subject} className={`pb-3 pr-4 font-semibold text-center ${getSubjectInfo(subject).color}`}>
+                            {getSubjectLabel(subject)}
+                          </th>
+                        ))}
                         <th className="pb-3 pr-4 font-semibold text-gray-600 text-center">Total</th>
                         <th className="pb-3 font-semibold text-gray-600 text-center">%</th>
                       </tr>
@@ -608,9 +777,6 @@ const AdminView: React.FC<AdminViewProps> = ({
                       {sortedSubmissions.map((sub, idx) => {
                         if (!sub) return null
                         const sectionResults = sub.sectionResults || []
-                        const phySr = sectionResults.find(s => s?.subject === 'physics')
-                        const chemSr = sectionResults.find(s => s?.subject === 'chemistry')
-                        const mathSr = sectionResults.find(s => s?.subject === 'maths')
 
                         return (
                           <tr key={sub._id || idx} className={`border-b hover:bg-gray-50 ${idx < 3 ? 'bg-yellow-50' : ''}`}>
@@ -619,28 +785,27 @@ const AdminView: React.FC<AdminViewProps> = ({
                               <p className="font-medium">{getStudentName(sub)}</p>
                               <p className="text-xs text-gray-400">{getStudentEmail(sub)}</p>
                             </td>
-                            <td className="py-3 pr-4 text-gray-600">{getTestTitle(sub)}</td>
-                            <td className="py-3 pr-4 text-center">
-                              {phySr ? (
-                                <span className={getScoreColor(phySr.maxScore > 0 ? Math.round((phySr.score / phySr.maxScore) * 100) : 0)}>
-                                  {phySr.score}/{phySr.maxScore}
-                                </span>
-                              ) : '—'}
+                            <td className="py-3 pr-4">
+                              <p className="text-gray-600">{getTestTitle(sub)}</p>
+                              {(() => {
+                                const testObj = getTestFromSubmission(sub)
+                                if (testObj?.testType === 'mock') return <span className="text-xs text-violet-500">Mock {testObj.stream && `(${testObj.stream})`}</span>
+                                if (testObj?.testType === 'custom') return <span className="text-xs text-indigo-500">Custom</span>
+                                return null
+                              })()}
                             </td>
-                            <td className="py-3 pr-4 text-center">
-                              {chemSr ? (
-                                <span className={getScoreColor(chemSr.maxScore > 0 ? Math.round((chemSr.score / chemSr.maxScore) * 100) : 0)}>
-                                  {chemSr.score}/{chemSr.maxScore}
-                                </span>
-                              ) : '—'}
-                            </td>
-                            <td className="py-3 pr-4 text-center">
-                              {mathSr ? (
-                                <span className={getScoreColor(mathSr.maxScore > 0 ? Math.round((mathSr.score / mathSr.maxScore) * 100) : 0)}>
-                                  {mathSr.score}/{mathSr.maxScore}
-                                </span>
-                              ) : '—'}
-                            </td>
+                            {rankingSubjects.map(subject => {
+                              const sr = sectionResults.find(s => s?.subject === subject)
+                              return (
+                                <td key={subject} className="py-3 pr-4 text-center">
+                                  {sr ? (
+                                    <span className={getScoreColor(sr.maxScore > 0 ? Math.round((sr.score / sr.maxScore) * 100) : 0)}>
+                                      {sr.score}/{sr.maxScore}
+                                    </span>
+                                  ) : '—'}
+                                </td>
+                              )
+                            })}
                             <td className="py-3 pr-4 text-center font-semibold">{sub.totalScore || 0}/{sub.totalMaxScore || 0}</td>
                             <td className={`py-3 text-center font-bold ${getScoreColor(sub.percentage || 0)}`}>{sub.percentage || 0}%</td>
                           </tr>
@@ -652,9 +817,12 @@ const AdminView: React.FC<AdminViewProps> = ({
               )}
             </div>
 
-            {/* Section Top Performers */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {['physics', 'chemistry', 'maths'].map(subject => {
+            {/* Section Top Performers - Dynamic subjects */}
+            <div className={`grid gap-6 ${
+              allSubjectsInAttempts.length <= 3 ? 'grid-cols-1 md:grid-cols-3' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4'
+            }`}>
+              {allSubjectsInAttempts.map(subject => {
+                const subInfo = getSubjectInfo(subject)
                 const subjectScores = validAttempts
                   .map(a => {
                     if (!a?.sectionResults) return null
@@ -672,8 +840,8 @@ const AdminView: React.FC<AdminViewProps> = ({
                   .slice(0, 5)
 
                 return (
-                  <div key={subject} className={`bg-white rounded-lg shadow p-4 border-t-4 ${subject === 'physics' ? 'border-blue-500' : subject === 'chemistry' ? 'border-green-500' : 'border-purple-500'}`}>
-                    <h3 className="font-bold capitalize mb-3">🏅 Top {subject}</h3>
+                  <div key={subject} className={`bg-white rounded-lg shadow p-4 border-t-4 ${subInfo.borderTop}`}>
+                    <h3 className="font-bold mb-3">🏅 Top {subInfo.label}</h3>
                     {subjectScores.length === 0 ? (
                       <p className="text-gray-400 text-sm">No data</p>
                     ) : (
@@ -711,17 +879,72 @@ const AdminView: React.FC<AdminViewProps> = ({
                 <p className="text-gray-600">Total Tests</p>
                 <div className="mt-2 text-xs text-gray-500">
                   {tests.filter(t => t?.approved).length} approved | {pendingTests.length} pending
+                  <br />
+                  {tests.filter(t => t?.testType === 'mock').length} mock | {tests.filter(t => t?.testType === 'custom').length} custom
                 </div>
               </div>
               <div className="bg-white rounded-lg shadow p-6">
                 <div className="text-2xl mb-3">📚</div>
                 <p className="text-3xl font-bold">{validAttempts.length}</p>
                 <p className="text-gray-600">Submissions</p>
+                {validAttempts.length > 0 && (
+                  <div className="mt-2 text-xs text-gray-500">
+                    Avg: {Math.round(validAttempts.reduce((sum, a) => sum + (a.percentage || 0), 0) / validAttempts.length)}%
+                  </div>
+                )}
               </div>
               <div className="bg-white rounded-lg shadow p-6">
                 <div className="text-2xl mb-3">🎓</div>
                 <p className="text-3xl font-bold">{courses.length}</p>
                 <p className="text-gray-600">Courses</p>
+              </div>
+            </div>
+
+            {/* Answer Key Status Overview */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                <Eye className="w-5 h-5 text-indigo-600" />
+                Answer Key Visibility
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+                  <p className="text-2xl font-bold text-emerald-700">
+                    {tests.filter(t => t?.showAnswerKey).length}
+                  </p>
+                  <p className="text-sm text-emerald-600">Tests with answer key visible</p>
+                </div>
+                <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                  <p className="text-2xl font-bold text-red-700">
+                    {tests.filter(t => t && !t.showAnswerKey).length}
+                  </p>
+                  <p className="text-sm text-red-600">Tests with answer key hidden</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {tests.filter(t => t?.approved).map(t => (
+                  <div key={t._id} className="flex justify-between items-center p-3 border rounded">
+                    <div className="flex items-center gap-2">
+                      {t.showAnswerKey ? (
+                        <Eye className="w-4 h-4 text-emerald-600" />
+                      ) : (
+                        <EyeOff className="w-4 h-4 text-red-500" />
+                      )}
+                      <span className="font-medium text-sm">{t.title}</span>
+                      {getTestTypeBadge(t)}
+                    </div>
+                    <button
+                      disabled={actionLoading === `answerkey-${t._id}`}
+                      onClick={() => handleToggleAnswerKey(t._id, t.showAnswerKey)}
+                      className={`px-3 py-1 rounded text-xs font-medium inline-flex items-center gap-1 disabled:opacity-60 ${
+                        t.showAnswerKey
+                          ? 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                          : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                      }`}
+                    >
+                      {actionLoading === `answerkey-${t._id}` ? '...' : t.showAnswerKey ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -744,18 +967,34 @@ const AdminView: React.FC<AdminViewProps> = ({
                     return (
                       <div key={t._id} className="p-3 border rounded flex justify-between items-center">
                         <div>
-                          <p className="font-medium">{t.title}</p>
-                          <div className="flex gap-1 mt-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-medium">{t.title}</p>
+                            {getTestTypeBadge(t)}
+                            {t.showAnswerKey ? (
+                              <Eye className="w-3 h-3 text-emerald-500" />
+                            ) : (
+                              <EyeOff className="w-3 h-3 text-red-400" />
+                            )}
+                          </div>
+                          <div className="flex gap-1 mt-1 flex-wrap">
                             {t.sections?.map(s => s && (
                               <span key={s.subject} className={`text-xs px-2 py-0.5 rounded ${getSectionBadgeColor(s.subject)}`}>
-                                {s.subject}: {s.questions?.length || 0}Q
+                                {getSubjectLabel(s.subject)}: {s.questions?.length || 0}Q
                               </span>
                             ))}
                           </div>
+                          {(t.testType === 'mock' || t.testType === 'custom') && (
+                            <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {getTimingDescription(t)}
+                            </p>
+                          )}
                         </div>
-                        <div className="text-right">
+                        <div className="text-right shrink-0 ml-4">
                           <p className="text-sm font-medium">{testAttempts.length} attempt{testAttempts.length !== 1 ? 's' : ''}</p>
-                          {testAttempts.length > 0 && <p className="text-xs text-gray-500">Avg: {avgScore}%</p>}
+                          {testAttempts.length > 0 && (
+                            <p className={`text-xs font-semibold ${getScoreColor(avgScore)}`}>Avg: {avgScore}%</p>
+                          )}
                         </div>
                       </div>
                     )

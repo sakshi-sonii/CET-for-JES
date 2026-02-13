@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await connectDB();
     await seedAdmin();
 
-    const { mode, email, password, name, role, course } = req.body;
+    const { mode, email, password, name, role, course, stream } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -36,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (mode === "login") {
       const user = await withRetry(() =>
         User.findOne({ email: email.toLowerCase() })
-          .select("_id email name role approved course password")
+          .select("_id email name role approved course stream password")
           .lean()
       );
 
@@ -70,6 +70,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: "Invalid role" });
       }
 
+      // Validate stream if provided
+      if (stream && !["PCM", "PCB"].includes(stream)) {
+        return res.status(400).json({ message: "Stream must be 'PCM' or 'PCB'" });
+      }
+
       // Parallel: check existing + hash password
       const [existing, hashedPassword] = await Promise.all([
         withRetry(() =>
@@ -82,16 +87,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: "Email already registered" });
       }
 
-      await withRetry(() =>
-        User.create({
-          email: email.toLowerCase(),
-          password: hashedPassword,
-          name,
-          role,
-          course: course || undefined,
-          approved: false,
-        })
-      );
+      const userData: any = {
+        email: email.toLowerCase(),
+        password: hashedPassword,
+        name,
+        role,
+        approved: false,
+      };
+
+      if (course) userData.course = course;
+      if (stream) userData.stream = stream;
+
+      await withRetry(() => User.create(userData));
 
       return res.status(201).json({
         message: "Registration successful! Please wait for admin approval.",
@@ -103,7 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error.code === 11000) {
       return res.status(400).json({ message: "Email already registered" });
     }
-    console.error("auth error:", error.message);
-    return res.status(500).json({ message: error.message });
+    console.error("Auth API error:", error.message);
+    return res.status(500).json({ message: error.message || "Internal server error" });
   }
 }
