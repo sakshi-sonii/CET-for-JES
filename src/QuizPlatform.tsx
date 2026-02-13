@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Award } from 'lucide-react';
 import type { User, Test, Course, Material, TestSubmission } from './types';
 import { api } from './api';
@@ -30,7 +30,10 @@ const QuizPlatform: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [studentActiveTab, setStudentActiveTab] = useState<string>('tests');
 
-  // Fetch courses on mount
+  // Track current user ID to prevent stale data
+  const currentUserIdRef = useRef<string | null>(null);
+
+  // Fetch courses on mount (public endpoint)
   useEffect(() => {
     api("courses").then(setCourses).catch(console.error);
   }, []);
@@ -51,8 +54,11 @@ const QuizPlatform: React.FC = () => {
             ...res.user,
             _id: res.user._id || res.user.id,
           };
+          currentUserIdRef.current = userData._id;
           setUser(userData);
           setView(userData.role);
+        } else {
+          localStorage.removeItem("token");
         }
       })
       .catch(() => {
@@ -61,43 +67,89 @@ const QuizPlatform: React.FC = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  // Fetch data when user is set
-  const fetchData = useCallback(async () => {
-    if (!user) return;
+  // ========================
+  // Fetch all data for current user
+  // ========================
+  const fetchData = useCallback(async (forUser?: User) => {
+    const activeUser = forUser || user;
+    if (!activeUser) return;
+
+    // Prevent fetching data for a stale user
+    if (currentUserIdRef.current !== activeUser._id) return;
 
     try {
-      const [testsData, materialsData, attemptsData] = await Promise.all([
+      const promises: Promise<any>[] = [
         api("tests"),
         api("materials"),
-        api("submissions"),
-      ]);
+        api("attempts"),
+        api("courses"),
+      ];
 
-      setTests(testsData);
-      setMaterials(materialsData);
+      if (activeUser.role === 'admin') {
+        promises.push(api("users"));
+      }
+
+      const results = await Promise.allSettled(promises);
+
+      // Only update state if this is still the current user
+      if (currentUserIdRef.current !== activeUser._id) return;
+
+      const getValue = (result: PromiseSettledResult<any>, fallback: any = []) =>
+        result.status === 'fulfilled' ? result.value : fallback;
+
+      setTests(getValue(results[0]));
+      setMaterials(getValue(results[1]));
+
+      const attemptsData = getValue(results[2]);
       setAttempts(Array.isArray(attemptsData) ? attemptsData : []);
 
-      // Admin also needs users list
-      if (user.role === 'admin') {
-        const usersData = await api("users");
-        setUsers(usersData);
+      setCourses(getValue(results[3]));
+
+      if (activeUser.role === 'admin' && results[4]) {
+        setUsers(getValue(results[4]));
       }
     } catch (error) {
       console.error("Error fetching data:", error);
     }
   }, [user]);
 
+  // Fetch data when user changes
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (user) {
+      fetchData(user);
+    }
+  }, [user?._id]);
 
   // ========================
-  // Submit test — called by TakingTestView
+  // Login handler
+  // ========================
+  const handleLogin = useCallback((_token: string, userData: any) => {
+    const normalizedUser: User = {
+      ...userData,
+      _id: userData._id || userData.id,
+    };
+
+    // Clear all previous user's data first
+    setUsers([]);
+    setTests([]);
+    setAttempts([]);
+    setMaterials([]);
+    setStudentActiveTab('tests');
+
+    // Set new user
+    currentUserIdRef.current = normalizedUser._id;
+    setUser(normalizedUser);
+    setView(normalizedUser.role);
+  }, []);
+
+  // ========================
+  // Submit test
   // ========================
   const handleTestSubmit = async (testAnswers: Record<string, number>) => {
     if (!currentTest || !user) return;
 
     try {
-      const res = await api("submissions", "POST", {
+      const res = await api("attempts", "POST", {
         testId: currentTest._id,
         answers: testAnswers,
       });
@@ -133,13 +185,8 @@ const QuizPlatform: React.FC = () => {
       setStudentActiveTab('results');
       setView('student');
 
-      // Refresh submissions
-      try {
-        const attemptsData = await api("submissions");
-        setAttempts(Array.isArray(attemptsData) ? attemptsData : []);
-      } catch {
-        console.warn("Could not refresh submissions");
-      }
+      // Refresh data
+      fetchData();
     } catch (error: any) {
       alert(error.message || "Failed to submit test");
     }
@@ -148,27 +195,26 @@ const QuizPlatform: React.FC = () => {
   // ========================
   // Logout
   // ========================
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem("token");
+    currentUserIdRef.current = null;
     setUser(null);
     setUsers([]);
     setTests([]);
     setAttempts([]);
     setMaterials([]);
-    setCourses([]);
     setView('login');
     setCurrentTest(null);
     setStudentActiveTab('tests');
 
     // Re-fetch courses for login page
     api("courses").then(setCourses).catch(console.error);
-  };
+  }, []);
 
   // ========================
   // Start test
   // ========================
-  const startTest = (test: Test) => {
-    // Confirm before starting
+  const startTest = useCallback((test: Test) => {
     const testType = test.testType || 'custom';
     let confirmMsg = `Are you sure you want to start "${test.title}"?\n\n`;
 
@@ -201,7 +247,15 @@ const QuizPlatform: React.FC = () => {
 
     setCurrentTest(test);
     setView('taking-test');
-  };
+  }, []);
+
+  // ========================
+  // Stable update callbacks
+  // ========================
+  const handleTestsUpdate = useCallback((t: Test[]) => setTests(t), []);
+  const handleUsersUpdate = useCallback((u: User[]) => setUsers(u), []);
+  const handleMaterialsUpdate = useCallback((m: Material[]) => setMaterials(m), []);
+  const handleCoursesUpdate = useCallback((c: Course[]) => setCourses(c), []);
 
   // ========================
   // Loading
@@ -224,14 +278,7 @@ const QuizPlatform: React.FC = () => {
     <>
       {!user && view === 'login' && (
         <LoginView
-          onLoginSuccess={(_, userData) => {
-            const normalizedUser: User = {
-              ...userData,
-              _id: userData._id || userData.id,
-            };
-            setUser(normalizedUser);
-            setView(normalizedUser.role);
-          }}
+          onLoginSuccess={handleLogin}
           courses={courses}
         />
       )}
@@ -244,9 +291,9 @@ const QuizPlatform: React.FC = () => {
           courses={courses}
           attempts={attempts}
           onLogout={logout}
-          onUsersUpdate={setUsers}
-          onTestsUpdate={setTests}
-          onCoursesUpdate={setCourses}
+          onUsersUpdate={handleUsersUpdate}
+          onTestsUpdate={handleTestsUpdate}
+          onCoursesUpdate={handleCoursesUpdate}
         />
       )}
 
@@ -257,8 +304,8 @@ const QuizPlatform: React.FC = () => {
           courses={courses}
           materials={materials}
           onLogout={logout}
-          onTestsUpdate={setTests}
-          onMaterialsUpdate={setMaterials}
+          onTestsUpdate={handleTestsUpdate}
+          onMaterialsUpdate={handleMaterialsUpdate}
         />
       )}
 

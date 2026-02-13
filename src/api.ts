@@ -1,31 +1,37 @@
-const API_BASE = import.meta.env.VITE_API_URL || "";
+const API_BASE = import.meta.env.VITE_API_URL || "/api";
 
-export const api = async (url: string, method: string = "GET", body?: any) => {
+export async function api(
+  endpoint: string,
+  method: string = "GET",
+  body?: any
+): Promise<any> {
   const token = localStorage.getItem("token");
 
-  const res = await fetch(`${API_BASE}/api/${url}`, {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  // Cache-bust GET requests to avoid stale data
+  const separator = endpoint.includes("?") ? "&" : "?";
+  const url = method === "GET"
+    ? `${API_BASE}/${endpoint}${separator}_t=${Date.now()}`
+    : `${API_BASE}/${endpoint}`;
+
+  const res = await fetch(url, {
     method,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
   });
 
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({ message: 'Request failed' }));
-    throw new Error(errorData.message || `HTTP error! status: ${res.status}`);
+    const error = await res.json().catch(() => ({ message: "Request failed" }));
+    throw new Error(error.message || `HTTP ${res.status}`);
   }
 
-  const data = await res.json();
-
-  if (Array.isArray(data)) {
-    return data.map(d => ({ ...d, id: d._id || d.id }));
-  }
-
-  if (data?._id) {
-    data.id = data._id;
-  }
-
-  return data;
-};
+  return res.json();
+}
