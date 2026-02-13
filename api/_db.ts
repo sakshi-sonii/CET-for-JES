@@ -99,8 +99,8 @@ const questionSchema = new mongoose.Schema(
   {
     question: { type: String, default: "" },
     questionImage: { type: String, default: "" },
-    options: [{ type: String, required: true }],
-    optionImages: [{ type: String }],
+    options: [{ type: String, default: "" }],
+    optionImages: [{ type: String, default: "" }],
     correct: { type: Number, required: true },
     explanation: { type: String, default: "" },
     explanationImage: { type: String, default: "" },
