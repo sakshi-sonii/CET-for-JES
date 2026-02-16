@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Award } from 'lucide-react';
 import type { User, Test, Course, Material, TestSubmission } from './types';
 import { api } from './api';
 import LoginView from './views/LoginView';
@@ -264,7 +263,11 @@ const QuizPlatform: React.FC = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center">
-          <Award className="w-16 h-16 text-indigo-600 mx-auto mb-4 animate-pulse" />
+          <img 
+            src="/loader.jpg" 
+            alt="Loading" 
+            className="w-16 h-16 mx-auto mb-4 animate-pulse object-contain"
+          />
           <p className="text-gray-600">Loading...</p>
         </div>
       </div>
