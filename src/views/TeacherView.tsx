@@ -1,5 +1,9 @@
-import React, { useState, useRef } from 'react';
-import { BookOpen, LogOut, Upload, ImageIcon, FileText, Trash2, Download, Plus, Eye, EyeOff, Clock, Settings } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  BookOpen, LogOut, Upload, ImageIcon, FileText, Trash2, Download, Plus,
+  Eye, EyeOff, Clock, Settings, Save, Edit3, Camera, ScanLine, X, RefreshCw,
+  AlertCircle, CheckCircle
+} from 'lucide-react';
 import type { User, Test, Course, Material, Question, TestType, CourseStream } from '../types';
 import { api } from '../api';
 
@@ -18,6 +22,38 @@ type SubjectKey = 'physics' | 'chemistry' | 'maths' | 'biology';
 interface SectionForm {
   subject: SubjectKey;
   questions: Question[];
+}
+
+interface DraftTest {
+  id: string;
+  title: string;
+  course: string;
+  testType: TestType;
+  stream: CourseStream;
+  selectedSubjects: SubjectKey[];
+  sections: SectionForm[];
+  phyChemTime: number;
+  mathBioTime: number;
+  customDuration: number;
+  showAnswerKey: boolean;
+  lastSaved: string;
+  questionForm?: {
+    question: string;
+    questionImage: string;
+    options: string[];
+    optionImages: string[];
+    correct: number;
+    explanation: string;
+    explanationImage: string;
+  };
+  currentSection: number;
+}
+
+interface OCRResult {
+  question: string;
+  options: string[];
+  correct: number;
+  explanation: string;
 }
 
 const ALL_SUBJECTS: {
@@ -73,6 +109,8 @@ const getSubjectInfo = (key: string) =>
 const getMarksPerQuestion = (subject: string) =>
   subject === 'maths' ? 2 : 1;
 
+const DRAFTS_STORAGE_KEY = 'teacher_test_drafts';
+
 const TeacherView: React.FC<TeacherViewProps> = ({
   user,
   tests,
@@ -93,12 +131,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const [sections, setSections] = useState<SectionForm[]>([]);
   const [currentSection, setCurrentSection] = useState(0);
 
-  // New: Test type and timing controls
+  // Test type and timing
   const [testType, setTestType] = useState<TestType>('mock');
   const [stream, setStream] = useState<CourseStream>('PCM');
-  const [phyChemTime, setPhyChemTime] = useState(90); // minutes
-  const [mathBioTime, setMathBioTime] = useState(90); // minutes
-  const [customDuration, setCustomDuration] = useState(60); // minutes
+  const [phyChemTime, setPhyChemTime] = useState(90);
+  const [mathBioTime, setMathBioTime] = useState(90);
+  const [customDuration, setCustomDuration] = useState(60);
   const [showAnswerKeyOnCreate, setShowAnswerKeyOnCreate] = useState(false);
 
   const [questionForm, setQuestionForm] = useState({
@@ -123,6 +161,552 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const [uploadingFile, setUploadingFile] = useState(false);
   const mockFileInputRef = useRef<HTMLInputElement>(null);
   const sectionFileInputRef = useRef<HTMLInputElement>(null);
+
+  // ========================
+  // DRAFT SYSTEM STATE
+  // ========================
+  const [drafts, setDrafts] = useState<DraftTest[]>([]);
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
+  const [draftSaveStatus, setDraftSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [showDraftsList, setShowDraftsList] = useState(false);
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ========================
+  // OCR STATE
+  // ========================
+  const [showOCRModal, setShowOCRModal] = useState(false);
+  const [ocrImage, setOcrImage] = useState<string | null>(null);
+  const [ocrProcessing, setOcrProcessing] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrResults, setOcrResults] = useState<OCRResult[]>([]);
+  const [ocrRawText, setOcrRawText] = useState('');
+  const [showOCRRawText, setShowOCRRawText] = useState(false);
+  const ocrFileInputRef = useRef<HTMLInputElement>(null);
+  const ocrCameraInputRef = useRef<HTMLInputElement>(null);
+  const [ocrExplanationImage, setOcrExplanationImage] = useState<string | null>(null);
+  const [ocrExplanationProcessing, setOcrExplanationProcessing] = useState(false);
+  const [ocrExplanationText, setOcrExplanationText] = useState('');
+  const ocrExplanationFileRef = useRef<HTMLInputElement>(null);
+  const ocrExplanationCameraRef = useRef<HTMLInputElement>(null);
+
+  // ========================
+  // LOAD DRAFTS FROM LOCALSTORAGE
+  // ========================
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`${DRAFTS_STORAGE_KEY}_${user._id}`);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setDrafts(parsed);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load drafts:', e);
+    }
+  }, [user._id]);
+
+  // ========================
+  // SAVE DRAFTS TO LOCALSTORAGE
+  // ========================
+  const persistDrafts = useCallback((updatedDrafts: DraftTest[]) => {
+    try {
+      localStorage.setItem(
+        `${DRAFTS_STORAGE_KEY}_${user._id}`,
+        JSON.stringify(updatedDrafts)
+      );
+    } catch (e) {
+      console.error('Failed to persist drafts:', e);
+    }
+  }, [user._id]);
+
+  // ========================
+  // AUTO-SAVE DRAFT (debounced)
+  // ========================
+  const autoSaveDraft = useCallback(() => {
+    if (activeTab !== 'create-test') return;
+    if (selectedSubjects.length === 0 && !testTitle.trim()) return;
+
+    const totalQuestions = sections.reduce((sum, s) => sum + s.questions.length, 0);
+    const hasContent = testTitle.trim() || totalQuestions > 0 ||
+      questionForm.question.trim() || questionForm.questionImage;
+
+    if (!hasContent) return;
+
+    setDraftSaveStatus('saving');
+
+    const draft: DraftTest = {
+      id: currentDraftId || `draft_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      title: testTitle || 'Untitled Draft',
+      course: testCourse,
+      testType,
+      stream,
+      selectedSubjects,
+      sections,
+      phyChemTime,
+      mathBioTime,
+      customDuration,
+      showAnswerKey: showAnswerKeyOnCreate,
+      lastSaved: new Date().toISOString(),
+      questionForm: {
+        question: questionForm.question,
+        questionImage: questionForm.questionImage,
+        options: [...questionForm.options],
+        optionImages: [...questionForm.optionImages],
+        correct: questionForm.correct,
+        explanation: questionForm.explanation,
+        explanationImage: questionForm.explanationImage,
+      },
+      currentSection,
+    };
+
+    setDrafts(prev => {
+      const existing = prev.findIndex(d => d.id === draft.id);
+      let updated: DraftTest[];
+      if (existing >= 0) {
+        updated = [...prev];
+        updated[existing] = draft;
+      } else {
+        updated = [draft, ...prev];
+      }
+      persistDrafts(updated);
+      return updated;
+    });
+
+    if (!currentDraftId) {
+      setCurrentDraftId(draft.id);
+    }
+
+    setTimeout(() => setDraftSaveStatus('saved'), 500);
+    setTimeout(() => setDraftSaveStatus('idle'), 2500);
+  }, [
+    activeTab, testTitle, testCourse, testType, stream, selectedSubjects,
+    sections, phyChemTime, mathBioTime, customDuration, showAnswerKeyOnCreate,
+    questionForm, currentSection, currentDraftId, persistDrafts
+  ]);
+
+  // Debounced auto-save
+  useEffect(() => {
+    if (activeTab !== 'create-test') return;
+
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = setTimeout(() => {
+      autoSaveDraft();
+    }, 3000);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [
+    testTitle, testCourse, testType, stream, selectedSubjects,
+    sections, phyChemTime, mathBioTime, customDuration,
+    showAnswerKeyOnCreate, questionForm, currentSection, autoSaveDraft, activeTab
+  ]);
+
+  // ========================
+  // DRAFT MANAGEMENT
+  // ========================
+  const saveDraftManually = () => {
+    if (selectedSubjects.length === 0 && !testTitle.trim()) {
+      alert('Nothing to save. Add a title or select subjects first.');
+      return;
+    }
+    autoSaveDraft();
+  };
+
+  const loadDraft = (draft: DraftTest) => {
+    setTestTitle(draft.title === 'Untitled Draft' ? '' : draft.title);
+    setTestCourse(draft.course);
+    setTestType(draft.testType);
+    setStream(draft.stream);
+    setSelectedSubjects(draft.selectedSubjects);
+    setSections(draft.sections);
+    setPhyChemTime(draft.phyChemTime);
+    setMathBioTime(draft.mathBioTime);
+    setCustomDuration(draft.customDuration);
+    setShowAnswerKeyOnCreate(draft.showAnswerKey);
+    setCurrentSection(draft.currentSection || 0);
+    setCurrentDraftId(draft.id);
+
+    if (draft.questionForm) {
+      setQuestionForm({
+        question: draft.questionForm.question || '',
+        questionImage: draft.questionForm.questionImage || '',
+        options: draft.questionForm.options || ['', '', '', ''],
+        optionImages: draft.questionForm.optionImages || ['', '', '', ''],
+        correct: draft.questionForm.correct || 0,
+        explanation: draft.questionForm.explanation || '',
+        explanationImage: draft.questionForm.explanationImage || '',
+      });
+    } else {
+      resetQuestionForm();
+    }
+
+    setShowDraftsList(false);
+    setActiveTab('create-test');
+  };
+
+  const deleteDraft = (draftId: string) => {
+    if (!confirm('Delete this draft? This cannot be undone.')) return;
+
+    setDrafts(prev => {
+      const updated = prev.filter(d => d.id !== draftId);
+      persistDrafts(updated);
+      return updated;
+    });
+
+    if (currentDraftId === draftId) {
+      setCurrentDraftId(null);
+    }
+  };
+
+  const clearCurrentDraft = () => {
+    if (currentDraftId) {
+      setDrafts(prev => {
+        const updated = prev.filter(d => d.id !== currentDraftId);
+        persistDrafts(updated);
+        return updated;
+      });
+    }
+    setCurrentDraftId(null);
+  };
+
+  const getDraftQuestionCount = (draft: DraftTest): number => {
+    return draft.sections.reduce((sum, s) => sum + s.questions.length, 0);
+  };
+
+  const formatDraftDate = (isoString: string): string => {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+    });
+  };
+
+  // ========================
+  // OCR FUNCTIONS
+  // ========================
+  const convertImageToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const performOCR = async (imageData: string): Promise<string> => {
+    const Tesseract = await import('tesseract.js');
+
+    const result = await Tesseract.recognize(imageData, 'eng', {
+      logger: (m: any) => {
+        if (m.status === 'recognizing text') {
+          setOcrProgress(Math.round(m.progress * 100));
+        }
+      },
+    });
+
+    return result.data.text;
+  };
+
+  const parseOCRText = (rawText: string): OCRResult[] => {
+    const lines = rawText
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    const results: OCRResult[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // Try to match question patterns
+      const qMatch = line.match(
+        /^(?:Q(?:uestion)?\s*)?(\d+)\s*[.:)\-]\s*(.*)/i
+      );
+
+      if (qMatch) {
+        let questionText = qMatch[2]?.trim() || '';
+
+        // Collect continuation lines for question
+        i++;
+        while (i < lines.length) {
+          const nextLine = lines[i];
+          const isOption = nextLine.match(/^\(?([A-Da-d1-4])\)?\s*[.:)\-]?\s*/);
+          const isNextQ = nextLine.match(/^(?:Q(?:uestion)?\s*)?(\d+)\s*[.:)\-]\s*/i);
+          if (isOption || isNextQ) break;
+          questionText += ' ' + nextLine;
+          i++;
+        }
+
+        const optionTexts: string[] = ['', '', '', ''];
+        let correct = 0;
+
+        // Parse options
+        for (let oi = 0; oi < 4 && i < lines.length; oi++) {
+          const optLine = lines[i];
+          const optMatch = optLine.match(
+            /^\(?([A-Da-d1-4])\)?\s*[.:)\-]?\s*(.*)/
+          );
+
+          if (optMatch) {
+            let optText = optMatch[2]?.trim() || '';
+            i++;
+
+            // Collect continuation lines for option
+            while (i < lines.length) {
+              const nextLine = lines[i];
+              const isNextOpt = nextLine.match(/^\(?([A-Da-d1-4])\)?\s*[.:)\-]?\s*/);
+              const isNextQ = nextLine.match(/^(?:Q(?:uestion)?\s*)?(\d+)\s*[.:)\-]\s*/i);
+              const isCorrectLine = nextLine.match(/(?:correct|answer|ans)\s*[.:)\-]?\s*([A-Da-d1-4])/i);
+              const isExplanation = nextLine.match(/(?:explanation|explain|reason|solution|hint)\s*[.:)\-]?\s*/i);
+              if (isNextOpt || isNextQ || isCorrectLine || isExplanation) break;
+              optText += ' ' + nextLine;
+              i++;
+            }
+
+            optionTexts[oi] = optText.trim();
+          } else {
+            break;
+          }
+        }
+
+        // Check for correct answer line
+        if (i < lines.length) {
+          const corrMatch = lines[i].match(
+            /(?:correct|answer|ans)\s*[.:)\-]?\s*([A-Da-d1-4])/i
+          );
+          if (corrMatch) {
+            const val = corrMatch[1].toUpperCase();
+            if ('ABCD'.includes(val)) correct = 'ABCD'.indexOf(val);
+            else {
+              const num = parseInt(val);
+              if (num >= 1 && num <= 4) correct = num - 1;
+            }
+            i++;
+          }
+        }
+
+        // Check for explanation
+        let explanation = '';
+        if (i < lines.length) {
+          const expMatch = lines[i].match(
+            /(?:explanation|explain|reason|solution|hint)\s*[.:)\-]?\s*(.*)/i
+          );
+          if (expMatch) {
+            explanation = expMatch[1]?.trim() || '';
+            i++;
+            // Collect continuation lines
+            while (i < lines.length) {
+              const nextLine = lines[i];
+              const isNextQ = nextLine.match(/^(?:Q(?:uestion)?\s*)?(\d+)\s*[.:)\-]\s*/i);
+              if (isNextQ) break;
+              explanation += ' ' + nextLine;
+              i++;
+            }
+          }
+        }
+
+        const hasContent = questionText && optionTexts.some(o => o);
+
+        if (hasContent) {
+          results.push({
+            question: questionText.trim(),
+            options: optionTexts,
+            correct,
+            explanation: explanation.trim(),
+          });
+        }
+      } else {
+        i++;
+      }
+    }
+
+    // If no structured questions found, try simpler parsing
+    if (results.length === 0 && lines.length > 0) {
+      // Try to find any question-like content
+      let currentQuestion = '';
+      const options: string[] = [];
+
+      for (const line of lines) {
+        const optMatch = line.match(/^\(?([A-Da-d])\)?\s*[.:)\-]?\s*(.*)/);
+        if (optMatch && currentQuestion) {
+          options.push(optMatch[2]?.trim() || line);
+        } else if (!optMatch) {
+          if (currentQuestion && options.length >= 2) {
+            while (options.length < 4) options.push('');
+            results.push({
+              question: currentQuestion,
+              options: options.slice(0, 4),
+              correct: 0,
+              explanation: '',
+            });
+            options.length = 0;
+          }
+          currentQuestion = line;
+        }
+      }
+
+      if (currentQuestion && options.length >= 2) {
+        while (options.length < 4) options.push('');
+        results.push({
+          question: currentQuestion,
+          options: options.slice(0, 4),
+          correct: 0,
+          explanation: '',
+        });
+      }
+    }
+
+    return results;
+  };
+
+  const handleOCRImageSelect = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    mode: 'question' | 'explanation'
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      const base64 = await convertImageToBase64(file);
+
+      if (mode === 'question') {
+  setOcrImage(base64);
+  setOcrResults([]);
+  setOcrRawText('');
+  setShowOCRModal(true);
+} else {
+        setOcrExplanationImage(base64);
+        processExplanationOCR(base64);
+      }
+    } catch (err) {
+      alert('Failed to read image');
+    }
+
+    e.target.value = '';
+  };
+
+  const processQuestionOCR = async () => {
+    if (!ocrImage) return;
+
+    setOcrProcessing(true);
+    setOcrProgress(0);
+    setOcrResults([]);
+    setOcrRawText('');
+
+    try {
+      const text = await performOCR(ocrImage);
+      setOcrRawText(text);
+
+      const parsed = parseOCRText(text);
+      setOcrResults(parsed);
+
+      if (parsed.length === 0) {
+        setShowOCRRawText(true);
+      }
+    } catch (err: any) {
+      alert('OCR failed: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setOcrProcessing(false);
+    }
+  };
+
+  const processExplanationOCR = async (imageData: string) => {
+    setOcrExplanationProcessing(true);
+
+    try {
+      const text = await performOCR(imageData);
+      setOcrExplanationText(text.trim());
+    } catch (err: any) {
+      alert('OCR failed: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setOcrExplanationProcessing(false);
+    }
+  };
+
+  const applyOCRQuestion = (result: OCRResult, index: number) => {
+    setQuestionForm(prev => ({
+      ...prev,
+      question: result.question,
+      options: [...result.options],
+      correct: result.correct,
+      explanation: result.explanation,
+    }));
+
+    setOcrResults(prev => prev.filter((_, i) => i !== index));
+
+    if (ocrResults.length <= 1) {
+      setShowOCRModal(false);
+    }
+  };
+
+  const applyAllOCRQuestions = () => {
+    if (sections.length === 0) {
+      alert('Please select a subject first');
+      return;
+    }
+
+    const newQuestions: Question[] = ocrResults.map(r => ({
+      question: r.question,
+      options: [...r.options],
+      correct: r.correct,
+      explanation: r.explanation || undefined,
+    }));
+
+    setSections(prev => {
+      const updated = [...prev];
+      updated[currentSection] = {
+        ...updated[currentSection],
+        questions: [...updated[currentSection].questions, ...newQuestions],
+      };
+      return updated;
+    });
+
+    setOcrResults([]);
+    setShowOCRModal(false);
+    alert(`✅ Added ${newQuestions.length} questions from OCR!`);
+  };
+
+  const applyOCRToRawText = () => {
+    setQuestionForm(prev => ({
+      ...prev,
+      question: ocrRawText,
+    }));
+    setShowOCRModal(false);
+  };
+
+  const applyExplanationOCR = () => {
+    setQuestionForm(prev => ({
+      ...prev,
+      explanation: ocrExplanationText,
+      explanationImage: ocrExplanationImage || '',
+    }));
+    setOcrExplanationImage(null);
+    setOcrExplanationText('');
+  };
 
   // ========================
   // Helpers
@@ -156,7 +740,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     }, 0);
   };
 
-  // Determine if current selection qualifies as mock
   const isMockEligible = (): boolean => {
     const hasPhy = selectedSubjects.includes('physics');
     const hasChem = selectedSubjects.includes('chemistry');
@@ -165,7 +748,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     return hasPhy && hasChem && (hasMaths || hasBio) && selectedSubjects.length >= 3;
   };
 
-  // Auto-detect stream from subjects
   const detectStream = (subjects: SubjectKey[]): CourseStream => {
     if (subjects.includes('biology') && !subjects.includes('maths')) return 'PCB';
     return 'PCM';
@@ -183,31 +765,25 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         newSelected = [...prev, subject];
       }
 
-      // Rebuild sections preserving existing questions
       const newSections = newSelected.map(sub => {
         const existing = sections.find(s => s.subject === sub);
         return existing || { subject: sub, questions: [] };
       });
       setSections(newSections);
 
-      // Fix current section index
       if (newSections.length > 0 && currentSection >= newSections.length) {
         setCurrentSection(newSections.length - 1);
       } else if (newSections.length === 0) {
         setCurrentSection(0);
       }
 
-      // Auto-detect stream
       setStream(detectStream(newSelected));
 
-      // Auto-set test type
       const hasPhy = newSelected.includes('physics');
       const hasChem = newSelected.includes('chemistry');
       const hasMaths = newSelected.includes('maths');
       const hasBio = newSelected.includes('biology');
-      if (hasPhy && hasChem && (hasMaths || hasBio) && newSelected.length >= 3) {
-        // Eligible for mock - keep current choice
-      } else {
+      if (!(hasPhy && hasChem && (hasMaths || hasBio) && newSelected.length >= 3)) {
         setTestType('custom');
       }
 
@@ -249,14 +825,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   // ========================
   // Image helpers
   // ========================
-  const convertImageToBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
   const handleImageUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     type: 'question' | 'option' | 'explanation',
@@ -324,8 +892,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       return;
     }
 
-    const hasQuestionContent =
-      questionForm.question.trim() || questionForm.questionImage;
+    const hasQuestionContent = questionForm.question.trim() || questionForm.questionImage;
     const allOptionsValid = questionForm.options.every(
       (o, idx) => o.trim() || questionForm.optionImages[idx]
     );
@@ -374,7 +941,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   // Create test
   // ========================
   const createTest = async () => {
-    // Auto-add pending question
     const hasQ = questionForm.question.trim() || questionForm.questionImage;
     const allOpts = questionForm.options.every(
       (o, idx) => o.trim() || questionForm.optionImages[idx]
@@ -402,18 +968,10 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
     const emptySections = sections.filter(s => s.questions.length === 0);
     if (emptySections.length > 0) {
-      const names = emptySections
-        .map(s => getSubjectInfo(s.subject).label)
-        .join(', ');
-      if (
-        !confirm(
-          `${names} section(s) have no questions. Remove them and continue?`
-        )
-      )
-        return;
+      const names = emptySections.map(s => getSubjectInfo(s.subject).label).join(', ');
+      if (!confirm(`${names} section(s) have no questions. Remove them and continue?`)) return;
     }
 
-    // Validate mock test requirements
     if (testType === 'mock') {
       const activeSections = sections.filter(s => s.questions.length > 0);
       const activeSubjects = activeSections.map(s => s.subject);
@@ -432,7 +990,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       }
     }
 
-    // Validate custom test duration
     if (testType === 'custom' && (!customDuration || customDuration < 1)) {
       alert('Please set a valid duration for the custom test');
       return;
@@ -480,6 +1037,9 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
       await api('tests', 'POST', payload);
 
+      // Clear current draft after successful creation
+      clearCurrentDraft();
+
       // Reset
       setTestTitle('');
       setTestCourse('');
@@ -508,10 +1068,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   // ========================
   // Toggle active
   // ========================
-  const handleToggleActive = async (
-    testId: string,
-    currentActive: boolean
-  ) => {
+  const handleToggleActive = async (testId: string, currentActive: boolean) => {
     setActionLoading(testId);
     try {
       await api(`tests/${testId}`, 'PATCH', { active: !currentActive });
@@ -523,9 +1080,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     setActionLoading(null);
   };
 
-  // ========================
-  // Toggle answer key visibility
-  // ========================
   const handleToggleAnswerKey = async (testId: string, currentShowAnswerKey: boolean) => {
     setActionLoading(`answerkey-${testId}`);
     try {
@@ -546,18 +1100,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
     return jsonData
       .map((row: any) => {
-        const correctRaw =
-          row.Correct ?? row.correct ?? row.CorrectAnswer ?? 0;
+        const correctRaw = row.Correct ?? row.correct ?? row.CorrectAnswer ?? 0;
         const correctNum = Number(correctRaw);
-        const correct = isNaN(correctNum)
-          ? 0
-          : Math.max(0, Math.min(3, correctNum - 1));
+        const correct = isNaN(correctNum) ? 0 : Math.max(0, Math.min(3, correctNum - 1));
 
-        const questionImage =
-          String(row.QuestionImage || row.questionImage || '') || undefined;
-        const explanationImage =
-          String(row.ExplanationImage || row.explanationImage || '') ||
-          undefined;
+        const questionImage = String(row.QuestionImage || row.questionImage || '') || undefined;
+        const explanationImage = String(row.ExplanationImage || row.explanationImage || '') || undefined;
         const optionImages = [
           String(row.Option1Image || row.option1Image || ''),
           String(row.Option2Image || row.option2Image || ''),
@@ -577,16 +1125,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
           ],
           optionImages: hasOptionImages ? optionImages : undefined,
           correct,
-          explanation:
-            String(row.Explanation || row.explanation || '') || undefined,
+          explanation: String(row.Explanation || row.explanation || '') || undefined,
           explanationImage,
         };
       })
       .filter((q: any) => {
         const hasQuestion = q.question || q.questionImage;
         const allOptionsValid = q.options.every(
-          (o: string, idx: number) =>
-            o || (q.optionImages && q.optionImages[idx])
+          (o: string, idx: number) => o || (q.optionImages && q.optionImages[idx])
         );
         return hasQuestion && allOptionsValid;
       });
@@ -603,9 +1149,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   // ========================
   // Word (.docx) parsing
   // ========================
-  const parseWordLines = async (
-    file: File
-  ): Promise<{ text: string; images: string[] }[]> => {
+  const parseWordLines = async (file: File): Promise<{ text: string; images: string[] }[]> => {
     const mammoth = await import('mammoth');
     const arrayBuffer = await file.arrayBuffer();
 
@@ -624,16 +1168,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     const html = result.value;
     const domParser = new DOMParser();
     const doc = domParser.parseFromString(html, 'text/html');
-    const elements = Array.from(
-      doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6')
-    );
+    const elements = Array.from(doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6'));
 
     const lines: { text: string; images: string[] }[] = [];
     for (const el of elements) {
       const text = el.textContent?.trim() || '';
-      const imgs = Array.from(el.querySelectorAll('img')).map(
-        img => img.getAttribute('src') || ''
-      );
+      const imgs = Array.from(el.querySelectorAll('img')).map(img => img.getAttribute('src') || '');
       if (text || imgs.length > 0) {
         lines.push({ text, images: imgs });
       }
@@ -641,22 +1181,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     return lines;
   };
 
-  const parseQuestionsFromLines = (
-    lines: { text: string; images: string[] }[]
-  ): Question[] => {
+  const parseQuestionsFromLines = (lines: { text: string; images: string[] }[]): Question[] => {
     const questions: Question[] = [];
     let i = 0;
 
     while (i < lines.length) {
       const line = lines[i];
-
-      const qMatch = line.text.match(
-        /^(?:Q(?:uestion)?\s*)?(\d+)\s*[.:)\-]\s*(.*)/i
-      );
-      if (!qMatch) {
-        i++;
-        continue;
-      }
+      const qMatch = line.text.match(/^(?:Q(?:uestion)?\s*)?(\d+)\s*[.:)\-]\s*(.*)/i);
+      if (!qMatch) { i++; continue; }
 
       const questionText = qMatch[2]?.trim() || '';
       const questionImage = line.images[0] || '';
@@ -669,9 +1201,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         i++;
         if (i >= lines.length) break;
         const optLine = lines[i];
-        const optMatch = optLine.text.match(
-          /^\(?([A-Da-d])\)?\s*[.:)\-]?\s*(.*)/
-        );
+        const optMatch = optLine.text.match(/^\(?([A-Da-d])\)?\s*[.:)\-]?\s*(.*)/);
         if (optMatch) {
           optionTexts[oi] = optMatch[2]?.trim() || '';
           optionImgs[oi] = optLine.images[0] || '';
@@ -684,9 +1214,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       i++;
       if (i < lines.length) {
         const corrLine = lines[i];
-        const corrMatch = corrLine.text.match(
-          /(?:correct|answer|ans)\s*[.:)\-]?\s*([A-Da-d1-4])/i
-        );
+        const corrMatch = corrLine.text.match(/(?:correct|answer|ans)\s*[.:)\-]?\s*([A-Da-d1-4])/i);
         if (corrMatch) {
           const val = corrMatch[1].toUpperCase();
           if ('ABCD'.includes(val)) correct = 'ABCD'.indexOf(val);
@@ -694,9 +1222,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             const num = parseInt(val);
             if (num >= 1 && num <= 4) correct = num - 1;
           }
-        } else {
-          i--;
-        }
+        } else { i--; }
       }
 
       let explanation = '';
@@ -704,15 +1230,11 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       i++;
       if (i < lines.length) {
         const expLine = lines[i];
-        const expMatch = expLine.text.match(
-          /(?:explanation|explain|reason|hint)\s*[.:)\-]?\s*(.*)/i
-        );
+        const expMatch = expLine.text.match(/(?:explanation|explain|reason|hint)\s*[.:)\-]?\s*(.*)/i);
         if (expMatch) {
           explanation = expMatch[1]?.trim() || '';
           explanationImage = expLine.images[0] || '';
-        } else {
-          i--;
-        }
+        } else { i--; }
       }
 
       const hasOptionImages = optionImgs.some(img => img);
@@ -747,14 +1269,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const parseWordMockTest = async (file: File): Promise<SectionForm[]> => {
     const lines = await parseWordLines(file);
 
-    const sectionContent: Record<
-      SubjectKey,
-      { text: string; images: string[] }[]
-    > = {
-      physics: [],
-      chemistry: [],
-      maths: [],
-      biology: [],
+    const sectionContent: Record<SubjectKey, { text: string; images: string[] }[]> = {
+      physics: [], chemistry: [], maths: [], biology: [],
     };
 
     let currentSubjectKey: SubjectKey | null = null;
@@ -771,28 +1287,20 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         else if (name === 'biology') currentSubjectKey = 'biology';
         continue;
       }
-
       if (currentSubjectKey && (line.text || line.images.length > 0)) {
         sectionContent[currentSubjectKey].push(line);
       }
     }
 
-    return (
-      ['physics', 'chemistry', 'maths', 'biology'] as SubjectKey[]
-    )
-      .map(sub => ({
-        subject: sub,
-        questions: parseQuestionsFromLines(sectionContent[sub]),
-      }))
+    return (['physics', 'chemistry', 'maths', 'biology'] as SubjectKey[])
+      .map(sub => ({ subject: sub, questions: parseQuestionsFromLines(sectionContent[sub]) }))
       .filter(s => s.questions.length > 0);
   };
 
   // ========================
   // File upload handlers
   // ========================
-  const handleSectionFileUpload = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  const handleSectionFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -808,16 +1316,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
     setUploadingFile(true);
     try {
-      const questions = isExcel
-        ? await parseExcelFile(file)
-        : await parseWordQuestions(file);
+      const questions = isExcel ? await parseExcelFile(file) : await parseWordQuestions(file);
 
       if (questions.length === 0) {
         alert(
           'No valid questions found.\n\n' +
-            (isExcel
-              ? 'Excel: Each row needs Question (or QuestionImage) and all 4 Options (or OptionImages).'
-              : 'Word: Use format Q1. question → A) B) C) D) → Correct: A → Explanation:')
+          (isExcel
+            ? 'Excel: Each row needs Question (or QuestionImage) and all 4 Options (or OptionImages).'
+            : 'Word: Use format Q1. question → A) B) C) D) → Correct: A → Explanation:')
         );
         return;
       }
@@ -826,28 +1332,18 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         const updated = [...prev];
         updated[currentSection] = {
           ...updated[currentSection],
-          questions: [
-            ...updated[currentSection].questions,
-            ...questions,
-          ],
+          questions: [...updated[currentSection].questions, ...questions],
         };
         return updated;
       });
 
       const imageCount = questions.filter(
-        q =>
-          q.questionImage ||
-          q.explanationImage ||
-          q.optionImages?.some(img => img)
+        q => q.questionImage || q.explanationImage || q.optionImages?.some(img => img)
       ).length;
 
       alert(
-        `✅ Imported ${questions.length} questions to ${
-          getSubjectInfo(sections[currentSection].subject).label
-        }!` +
-          (imageCount > 0
-            ? `\n📸 ${imageCount} questions contain images.`
-            : '')
+        `✅ Imported ${questions.length} questions to ${getSubjectInfo(sections[currentSection].subject).label}!` +
+        (imageCount > 0 ? `\n📸 ${imageCount} questions contain images.` : '')
       );
     } catch (error: any) {
       alert('Failed to parse file: ' + (error?.message || String(error)));
@@ -857,9 +1353,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     }
   };
 
-  const handleMockTestFileUpload = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  const handleMockTestFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -883,12 +1377,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         const workbook = XLSX.read(data, { type: 'array' });
 
         const sheetMap: Record<string, SubjectKey> = {
-          Physics: 'physics',
-          Chemistry: 'chemistry',
-          Mathematics: 'maths',
-          Maths: 'maths',
-          Math: 'maths',
-          Biology: 'biology',
+          Physics: 'physics', Chemistry: 'chemistry',
+          Mathematics: 'maths', Maths: 'maths', Math: 'maths', Biology: 'biology',
         };
 
         newSections = [];
@@ -907,21 +1397,17 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         newSections = await parseWordMockTest(file);
       }
 
-      const totalQ = newSections.reduce(
-        (sum, s) => sum + s.questions.length,
-        0
-      );
+      const totalQ = newSections.reduce((sum, s) => sum + s.questions.length, 0);
       if (totalQ === 0) {
         alert(
           'No valid questions found.\n\n' +
-            (isExcel
-              ? 'Excel: Make sure sheet names are: Physics, Chemistry, Mathematics, Biology'
-              : 'Word: Use section headers like === PHYSICS === etc.')
+          (isExcel
+            ? 'Excel: Make sure sheet names are: Physics, Chemistry, Mathematics, Biology'
+            : 'Word: Use section headers like === PHYSICS === etc.')
         );
         return;
       }
 
-      // Auto-select imported subjects
       const importedSubjects = newSections.map(s => s.subject);
       setSelectedSubjects(importedSubjects);
       setSections(newSections);
@@ -929,29 +1415,17 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       setStream(detectStream(importedSubjects));
 
       const totalImages = newSections.reduce(
-        (sum, s) =>
-          sum +
-          s.questions.filter(
-            q =>
-              q.questionImage ||
-              q.explanationImage ||
-              q.optionImages?.some(img => img)
-          ).length,
+        (sum, s) => sum + s.questions.filter(
+          q => q.questionImage || q.explanationImage || q.optionImages?.some(img => img)
+        ).length,
         0
       );
 
-      const summary = newSections
-        .map(
-          s =>
-            `${getSubjectInfo(s.subject).label}: ${s.questions.length}`
-        )
-        .join(', ');
+      const summary = newSections.map(s => `${getSubjectInfo(s.subject).label}: ${s.questions.length}`).join(', ');
 
       alert(
         `✅ Imported from ${isExcel ? 'Excel' : 'Word'}:\n${summary}\nTotal: ${totalQ} questions` +
-          (totalImages > 0
-            ? `\n📸 ${totalImages} questions contain images`
-            : '')
+        (totalImages > 0 ? `\n📸 ${totalImages} questions contain images` : '')
       );
     } catch (error: any) {
       alert('Failed to parse file: ' + (error?.message || String(error)));
@@ -974,79 +1448,39 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   const excelHeaders = [
-    'Question',
-    'QuestionImage',
-    'Option1',
-    'Option1Image',
-    'Option2',
-    'Option2Image',
-    'Option3',
-    'Option3Image',
-    'Option4',
-    'Option4Image',
-    'Correct',
-    'Explanation',
-    'ExplanationImage',
+    'Question', 'QuestionImage', 'Option1', 'Option1Image',
+    'Option2', 'Option2Image', 'Option3', 'Option3Image',
+    'Option4', 'Option4Image', 'Correct', 'Explanation', 'ExplanationImage',
   ];
 
   const excelColWidths = [
-    { wch: 35 },
-    { wch: 40 },
-    { wch: 20 },
-    { wch: 40 },
-    { wch: 20 },
-    { wch: 40 },
-    { wch: 20 },
-    { wch: 40 },
-    { wch: 20 },
-    { wch: 40 },
-    { wch: 8 },
-    { wch: 35 },
-    { wch: 40 },
+    { wch: 35 }, { wch: 40 }, { wch: 20 }, { wch: 40 },
+    { wch: 20 }, { wch: 40 }, { wch: 20 }, { wch: 40 },
+    { wch: 20 }, { wch: 40 }, { wch: 8 }, { wch: 35 }, { wch: 40 },
   ];
 
   const createInstructionSheet = (XLSX: any) => {
     const instrData = [
-      ['📋 TEMPLATE INSTRUCTIONS'],
-      [''],
+      ['📋 TEMPLATE INSTRUCTIONS'], [''],
       ['Column', 'Description', 'Required?'],
       ['Question', 'Question text', 'Yes (if no QuestionImage)'],
-      [
-        'QuestionImage',
-        'Image URL or base64',
-        'Yes (if no Question text)',
-      ],
+      ['QuestionImage', 'Image URL or base64', 'Yes (if no Question text)'],
       ['Option1–4', 'Option text', 'Yes (if no OptionImage)'],
-      [
-        'Option1Image–4Image',
-        'Option image URL or base64',
-        'Yes (if no Option text)',
-      ],
+      ['Option1Image–4Image', 'Option image URL or base64', 'Yes (if no Option text)'],
       ['Correct', 'Correct answer: 1, 2, 3, or 4', 'Yes'],
       ['Explanation', 'Explanation text', 'Optional'],
-      [
-        'ExplanationImage',
-        'Explanation image URL or base64',
-        'Optional',
-      ],
-      [''],
-      ['💡 TIPS:'],
+      ['ExplanationImage', 'Explanation image URL or base64', 'Optional'],
+      [''], ['💡 TIPS:'],
       ['• Each question/option: text OR image OR both'],
       ['• Correct: 1=Option1, 2=Option2, 3=Option3, 4=Option4'],
       ['• Images: full URLs (https://...) or base64 data'],
-      [''],
-      ['📊 MARKS PER QUESTION:'],
-      ['• Physics = 1 mark/question'],
-      ['• Chemistry = 1 mark/question'],
-      ['• Mathematics = 2 marks/question'],
-      ['• Biology = 1 mark/question'],
-      [''],
-      ['📝 TEST TYPES:'],
+      [''], ['📊 MARKS PER QUESTION:'],
+      ['• Physics = 1 mark/question'], ['• Chemistry = 1 mark/question'],
+      ['• Mathematics = 2 marks/question'], ['• Biology = 1 mark/question'],
+      [''], ['📝 TEST TYPES:'],
       ['• Mock Test: PCM or PCB with two-phase timing'],
       ['• Custom Test: Any subjects with single timer'],
-      [
-        '• For multi-subject Excel: use sheet names Physics, Chemistry, Mathematics, Biology',
-      ],
+      ['• For multi-subject Excel: use sheet names Physics, Chemistry, Mathematics, Biology'],
     ];
     const ws = XLSX.utils.aoa_to_sheet(instrData);
     ws['!cols'] = [{ wch: 30 }, { wch: 50 }, { wch: 30 }];
@@ -1056,132 +1490,20 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const sampleRows = (subject: string) => {
     const samples: Record<string, string[][]> = {
       physics: [
-        [
-          'What is the SI unit of force?',
-          '',
-          'Joule',
-          '',
-          'Newton',
-          '',
-          'Watt',
-          '',
-          'Pascal',
-          '',
-          '2',
-          'Newton is the SI unit of force',
-          '',
-        ],
-        [
-          'Identify the circuit:',
-          'https://example.com/circuit.png',
-          'Series',
-          '',
-          'Parallel',
-          '',
-          'Mixed',
-          '',
-          'None',
-          '',
-          '1',
-          '',
-          'https://example.com/circuit-sol.png',
-        ],
+        ['What is the SI unit of force?', '', 'Joule', '', 'Newton', '', 'Watt', '', 'Pascal', '', '2', 'Newton is the SI unit of force', ''],
+        ['Identify the circuit:', 'https://example.com/circuit.png', 'Series', '', 'Parallel', '', 'Mixed', '', 'None', '', '1', '', 'https://example.com/circuit-sol.png'],
       ],
       chemistry: [
-        [
-          'Atomic number of Carbon?',
-          '',
-          '5',
-          '',
-          '6',
-          '',
-          '7',
-          '',
-          '8',
-          '',
-          '2',
-          'Carbon has 6 protons',
-          '',
-        ],
-        [
-          'Identify the molecular structure:',
-          'https://example.com/mol.png',
-          '',
-          'https://example.com/a.png',
-          '',
-          'https://example.com/b.png',
-          '',
-          'https://example.com/c.png',
-          '',
-          'https://example.com/d.png',
-          '2',
-          '',
-          'https://example.com/mol-sol.png',
-        ],
+        ['Atomic number of Carbon?', '', '5', '', '6', '', '7', '', '8', '', '2', 'Carbon has 6 protons', ''],
+        ['Identify the molecular structure:', 'https://example.com/mol.png', '', 'https://example.com/a.png', '', 'https://example.com/b.png', '', 'https://example.com/c.png', '', 'https://example.com/d.png', '2', '', 'https://example.com/mol-sol.png'],
       ],
       maths: [
-        [
-          'Value of π (approx)?',
-          '',
-          '3.14',
-          '',
-          '2.71',
-          '',
-          '1.41',
-          '',
-          '1.73',
-          '',
-          '1',
-          'π ≈ 3.14159',
-          '',
-        ],
-        [
-          'Solve the equation:',
-          'https://example.com/eq.png',
-          'x=1',
-          '',
-          'x=2',
-          '',
-          'x=3',
-          '',
-          'x=4',
-          '',
-          '2',
-          'Solution:',
-          'https://example.com/sol.png',
-        ],
+        ['Value of π (approx)?', '', '3.14', '', '2.71', '', '1.41', '', '1.73', '', '1', 'π ≈ 3.14159', ''],
+        ['Solve the equation:', 'https://example.com/eq.png', 'x=1', '', 'x=2', '', 'x=3', '', 'x=4', '', '2', 'Solution:', 'https://example.com/sol.png'],
       ],
       biology: [
-        [
-          'Powerhouse of the cell?',
-          '',
-          'Nucleus',
-          '',
-          'Mitochondria',
-          '',
-          'Ribosome',
-          '',
-          'Golgi body',
-          '',
-          '2',
-          'Mitochondria produces ATP',
-          '',
-        ],
-        [
-          'Identify the organ:',
-          'https://example.com/organ.png',
-          'Heart',
-          '',
-          'Liver',
-          '',
-          'Kidney',
-          '',
-          'Lung',
-          '',
-          '3',
-          '',
-          'https://example.com/kidney-sol.png',
-        ],
+        ['Powerhouse of the cell?', '', 'Nucleus', '', 'Mitochondria', '', 'Ribosome', '', 'Golgi body', '', '2', 'Mitochondria produces ATP', ''],
+        ['Identify the organ:', 'https://example.com/organ.png', 'Heart', '', 'Liver', '', 'Kidney', '', 'Lung', '', '3', '', 'https://example.com/kidney-sol.png'],
       ],
     };
     return samples[subject] || samples.physics;
@@ -1196,10 +1518,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       ws['!cols'] = excelColWidths;
 
       const wb = {
-        Sheets: {
-          Questions: ws,
-          Instructions: createInstructionSheet(XLSX),
-        },
+        Sheets: { Questions: ws, Instructions: createInstructionSheet(XLSX) },
         SheetNames: ['Questions', 'Instructions'],
       };
       const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
@@ -1207,18 +1526,15 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         new Blob([wbout], { type: 'application/octet-stream' }),
         `${getSubjectInfo(subject).label.toLowerCase()}_template.xlsx`
       );
-    } catch {
-      alert('Failed to create template');
-    }
+    } catch { alert('Failed to create template'); }
   };
 
   const downloadMockTestTemplate = async () => {
     try {
       const XLSX = await import('xlsx');
-      const subjects =
-        selectedSubjects.length > 0
-          ? selectedSubjects
-          : (['physics', 'chemistry', 'maths', 'biology'] as SubjectKey[]);
+      const subjects = selectedSubjects.length > 0
+        ? selectedSubjects
+        : (['physics', 'chemistry', 'maths', 'biology'] as SubjectKey[]);
 
       const sheets: Record<string, any> = {};
       const sheetNames: string[] = [];
@@ -1243,9 +1559,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         new Blob([wbout], { type: 'application/octet-stream' }),
         'mock_test_template.xlsx'
       );
-    } catch {
-      alert('Failed to create template');
-    }
+    } catch { alert('Failed to create template'); }
   };
 
   const downloadWordTemplate = async (type: 'section' | 'mock') => {
@@ -1254,269 +1568,72 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
 
       const createInstructions = (): InstanceType<typeof Paragraph>[] => [
-        new Paragraph({
-          heading: HeadingLevel.HEADING_1,
-          children: [
-            new TextRun({
-              text: '📋 WORD TEMPLATE INSTRUCTIONS',
-              bold: true,
-              size: 28,
-            }),
-          ],
-        }),
+        new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: '📋 WORD TEMPLATE INSTRUCTIONS', bold: true, size: 28 })] }),
         new Paragraph({ children: [] }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'FORMAT RULES — Follow exactly:',
-              bold: true,
-              size: 24,
-              color: 'FF0000',
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: '• Questions: Q1. or Q1: or 1. or 1: or Question 1:',
-              size: 22,
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: '• Options: A) B) C) D) or a) b) c) d) or (A) (B) (C) (D)',
-              size: 22,
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: '• Correct: "Correct: A" or "Answer: 2" or "Ans: B"',
-              size: 22,
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: '• Explanation (optional): "Explanation: text"',
-              size: 22,
-            }),
-          ],
-        }),
+        new Paragraph({ children: [new TextRun({ text: 'FORMAT RULES — Follow exactly:', bold: true, size: 24, color: 'FF0000' })] }),
+        new Paragraph({ children: [new TextRun({ text: '• Questions: Q1. or Q1: or 1. or 1: or Question 1:', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: '• Options: A) B) C) D) or a) b) c) d) or (A) (B) (C) (D)', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: '• Correct: "Correct: A" or "Answer: 2" or "Ans: B"', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: '• Explanation (optional): "Explanation: text"', size: 22 })] }),
         new Paragraph({ children: [] }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: '🖼️ PASTE IMAGES directly into the document! They auto-extract as base64.',
-              bold: true,
-              size: 24,
-              color: '0066CC',
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: '⚠️ Each question/option MUST have text OR image.',
-              bold: true,
-              size: 22,
-              color: 'FF6600',
-            }),
-          ],
-        }),
+        new Paragraph({ children: [new TextRun({ text: '🖼️ PASTE IMAGES directly into the document! They auto-extract as base64.', bold: true, size: 24, color: '0066CC' })] }),
+        new Paragraph({ children: [new TextRun({ text: '⚠️ Each question/option MUST have text OR image.', bold: true, size: 22, color: 'FF6600' })] }),
         new Paragraph({ children: [] }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: '📊 Marks: Physics=1, Chemistry=1, Maths=2, Biology=1 per question',
-              size: 22,
-            }),
-          ],
-        }),
+        new Paragraph({ children: [new TextRun({ text: '📊 Marks: Physics=1, Chemistry=1, Maths=2, Biology=1 per question', size: 22 })] }),
         new Paragraph({ children: [] }),
       ];
 
-      const createSampleQuestions = (
-        subject: string
-      ): InstanceType<typeof Paragraph>[] => [
-        new Paragraph({
-          heading: HeadingLevel.HEADING_2,
-          children: [
-            new TextRun({
-              text: `--- ${subject} (Replace with your questions) ---`,
-              bold: true,
-              size: 24,
-            }),
-          ],
-        }),
+      const createSampleQuestions = (subject: string): InstanceType<typeof Paragraph>[] => [
+        new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: `--- ${subject} (Replace with your questions) ---`, bold: true, size: 24 })] }),
         new Paragraph({ children: [] }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'Q1. Sample text question?',
-              bold: true,
-              size: 22,
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [new TextRun({ text: 'A) First option', size: 22 })],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({ text: 'B) Second option', size: 22 }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'C) Third option (correct)',
-              size: 22,
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({ text: 'D) Fourth option', size: 22 }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'Correct: C',
-              size: 22,
-              color: '008800',
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'Explanation: Why C is correct.',
-              size: 22,
-              italics: true,
-            }),
-          ],
-        }),
+        new Paragraph({ children: [new TextRun({ text: 'Q1. Sample text question?', bold: true, size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'A) First option', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'B) Second option', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'C) Third option (correct)', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'D) Fourth option', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'Correct: C', size: 22, color: '008800' })] }),
+        new Paragraph({ children: [new TextRun({ text: 'Explanation: Why C is correct.', size: 22, italics: true })] }),
         new Paragraph({ children: [] }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'Q2. Image question: [PASTE IMAGE HERE]',
-              bold: true,
-              size: 22,
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'A) Option text or [PASTE OPTION IMAGE]',
-              size: 22,
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [new TextRun({ text: 'B) Option B', size: 22 })],
-        }),
-        new Paragraph({
-          children: [new TextRun({ text: 'C) Option C', size: 22 })],
-        }),
-        new Paragraph({
-          children: [new TextRun({ text: 'D) Option D', size: 22 })],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'Correct: A',
-              size: 22,
-              color: '008800',
-            }),
-          ],
-        }),
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'Explanation: [PASTE EXPLANATION IMAGE or type text]',
-              size: 22,
-              italics: true,
-            }),
-          ],
-        }),
+        new Paragraph({ children: [new TextRun({ text: 'Q2. Image question: [PASTE IMAGE HERE]', bold: true, size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'A) Option text or [PASTE OPTION IMAGE]', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'B) Option B', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'C) Option C', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'D) Option D', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: 'Correct: A', size: 22, color: '008800' })] }),
+        new Paragraph({ children: [new TextRun({ text: 'Explanation: [PASTE EXPLANATION IMAGE or type text]', size: 22, italics: true })] }),
         new Paragraph({ children: [] }),
       ];
 
       const subjectColors: Record<string, string> = {
-        Physics: '0000FF',
-        Chemistry: '008800',
-        Mathematics: '880088',
-        Biology: 'CC6600',
+        Physics: '0000FF', Chemistry: '008800', Mathematics: '880088', Biology: 'CC6600',
       };
 
       let doc: InstanceType<typeof Document>;
 
       if (type === 'section') {
-        const subLabel = sections[currentSection]
-          ? getSubjectInfo(sections[currentSection].subject).label
-          : 'Section';
-        doc = new Document({
-          sections: [
-            {
-              children: [
-                ...createInstructions(),
-                ...createSampleQuestions(subLabel),
-              ],
-            },
-          ],
-        });
+        const subLabel = sections[currentSection] ? getSubjectInfo(sections[currentSection].subject).label : 'Section';
+        doc = new Document({ sections: [{ children: [...createInstructions(), ...createSampleQuestions(subLabel)] }] });
       } else {
-        const subjects =
-          selectedSubjects.length > 0
-            ? selectedSubjects.map(s => getSubjectInfo(s).label)
-            : ['Physics', 'Chemistry', 'Mathematics', 'Biology'];
+        const subjects = selectedSubjects.length > 0
+          ? selectedSubjects.map(s => getSubjectInfo(s).label)
+          : ['Physics', 'Chemistry', 'Mathematics', 'Biology'];
 
-        const children: InstanceType<typeof Paragraph>[] = [
-          ...createInstructions(),
-        ];
-
+        const children: InstanceType<typeof Paragraph>[] = [...createInstructions()];
         for (const sub of subjects) {
           children.push(
-            new Paragraph({
-              heading: HeadingLevel.HEADING_1,
-              children: [
-                new TextRun({
-                  text: `=== ${sub.toUpperCase()} ===`,
-                  bold: true,
-                  size: 32,
-                  color: subjectColors[sub] || '000000',
-                }),
-              ],
-            }),
+            new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: `=== ${sub.toUpperCase()} ===`, bold: true, size: 32, color: subjectColors[sub] || '000000' })] }),
             new Paragraph({ children: [] }),
             ...createSampleQuestions(sub)
           );
         }
-
         doc = new Document({ sections: [{ children }] });
       }
 
       const blob = await Packer.toBlob(doc);
-      downloadBlob(
-        blob,
-        type === 'section'
-          ? 'section_template.docx'
-          : 'mock_test_template.docx'
-      );
+      downloadBlob(blob, type === 'section' ? 'section_template.docx' : 'mock_test_template.docx');
     } catch (error: any) {
       console.error('Word template error:', error);
-      alert(
-        'Failed to create Word template: ' +
-          (error?.message || 'Unknown error')
-      );
+      alert('Failed to create Word template: ' + (error?.message || 'Unknown error'));
     }
   };
 
@@ -1527,9 +1644,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const currentSubject = sections[currentSection]?.subject || 'physics';
   const currentSubjectInfo = getSubjectInfo(currentSubject);
 
-  // ========================
-  // Helper to format timing display on test cards
-  // ========================
   const formatTestTiming = (t: Test): string => {
     if (t.testType === 'mock') {
       const pc = t.sectionTimings?.physicsChemistry ?? 90;
@@ -1542,8 +1656,365 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     return '';
   };
 
+  // ========================
+  // OCR MODAL COMPONENT
+  // ========================
+  const renderOCRModal = () => {
+    if (!showOCRModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          {/* Header */}
+          <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center rounded-t-2xl z-10">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-100 rounded-lg">
+                <ScanLine className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold">OCR — Extract Questions from Image</h3>
+                <p className="text-xs text-gray-500">Upload or capture an image to extract question text</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setShowOCRModal(false);
+                setOcrImage(null);
+                setOcrResults([]);
+                setOcrRawText('');
+                setOcrProgress(0);
+              }}
+              className="p-2 hover:bg-gray-100 rounded-lg transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="p-6">
+            {/* Image selection */}
+            {!ocrImage && (
+              <div className="border-2 border-dashed border-gray-300 rounded-xl p-12 text-center">
+                <Camera className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600 text-lg mb-4">
+                  Upload an image or take a photo of the question
+                </p>
+                <div className="flex flex-wrap gap-3 justify-center">
+                  <button
+                    onClick={() => ocrFileInputRef.current?.click()}
+                    className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 inline-flex items-center gap-2 transition"
+                  >
+                    <Upload className="w-5 h-5" />
+                    Upload Image
+                  </button>
+                  <button
+                    onClick={() => ocrCameraInputRef.current?.click()}
+                    className="px-6 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 inline-flex items-center gap-2 transition"
+                  >
+                    <Camera className="w-5 h-5" />
+                    Take Photo
+                  </button>
+                  <input
+                    ref={ocrFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={e => handleOCRImageSelect(e, 'question')}
+                    className="hidden"
+                  />
+                  <input
+                    ref={ocrCameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={e => handleOCRImageSelect(e, 'question')}
+                    className="hidden"
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-4">
+                  Supports: PNG, JPG, JPEG, WebP • Best results with clear, well-lit images
+                </p>
+              </div>
+            )}
+
+            {/* Image preview + OCR controls */}
+            {ocrImage && (
+              <div>
+                {/* Image preview */}
+                <div className="mb-4 p-3 bg-gray-50 rounded-lg border">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-medium text-gray-600">Uploaded Image</span>
+                    <button
+                      onClick={() => {
+                        setOcrImage(null);
+                        setOcrResults([]);
+                        setOcrRawText('');
+                        setOcrProgress(0);
+                      }}
+                      className="text-xs text-red-500 hover:text-red-700 inline-flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" /> Remove
+                    </button>
+                  </div>
+                  <img
+                    src={ocrImage}
+                    alt="OCR source"
+                    className="max-h-64 w-full object-contain rounded border"
+                  />
+                </div>
+
+                {/* Process button */}
+                {!ocrProcessing && ocrResults.length === 0 && !ocrRawText && (
+                  <div className="flex flex-wrap gap-3 mb-4">
+                    <button
+                      onClick={processQuestionOCR}
+                      className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 inline-flex items-center gap-2 font-medium transition"
+                    >
+                      <ScanLine className="w-5 h-5" />
+                      Extract Text (OCR)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setOcrImage(null);
+                        ocrFileInputRef.current?.click();
+                      }}
+                      className="px-6 py-3 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 inline-flex items-center gap-2 transition"
+                    >
+                      <RefreshCw className="w-5 h-5" />
+                      Choose Different Image
+                    </button>
+                  </div>
+                )}
+
+                {/* Processing indicator */}
+                {ocrProcessing && (
+                  <div className="mb-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="animate-spin">
+                        <RefreshCw className="w-5 h-5 text-indigo-600" />
+                      </div>
+                      <span className="font-medium text-indigo-800">Processing image...</span>
+                    </div>
+                    <div className="w-full bg-indigo-200 rounded-full h-3">
+                      <div
+                        className="bg-indigo-600 h-3 rounded-full transition-all duration-300"
+                        style={{ width: `${ocrProgress}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-indigo-600 mt-1">{ocrProgress}% complete</p>
+                  </div>
+                )}
+
+                {/* Results */}
+                {!ocrProcessing && ocrResults.length > 0 && (
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h4 className="font-bold text-lg flex items-center gap-2">
+                        <CheckCircle className="w-5 h-5 text-green-500" />
+                        {ocrResults.length} Question{ocrResults.length > 1 ? 's' : ''} Extracted
+                      </h4>
+                      <div className="flex gap-2">
+                        {ocrResults.length > 1 && sections.length > 0 && (
+                          <button
+                            onClick={applyAllOCRQuestions}
+                            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm inline-flex items-center gap-1 transition"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Add All to {currentSubjectInfo.label}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setShowOCRRawText(!showOCRRawText)}
+                          className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition"
+                        >
+                          {showOCRRawText ? 'Hide' : 'Show'} Raw Text
+                        </button>
+                        <button
+                          onClick={() => {
+                            setOcrImage(null);
+                            setOcrResults([]);
+                            setOcrRawText('');
+                            setOcrProgress(0);
+                          }}
+                          className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm inline-flex items-center gap-1 transition"
+                        >
+                          <RefreshCw className="w-4 h-4" /> Retry
+                        </button>
+                      </div>
+                    </div>
+
+                    {showOCRRawText && (
+                      <div className="p-3 bg-gray-50 rounded-lg border">
+                        <label className="text-xs font-medium text-gray-500 block mb-1">Raw OCR Text</label>
+                        <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono max-h-40 overflow-y-auto">{ocrRawText}</pre>
+                      </div>
+                    )}
+
+                    {ocrResults.map((result, idx) => (
+                      <div key={idx} className="border rounded-lg p-4 bg-white shadow-sm">
+                        <div className="flex justify-between items-start mb-3">
+                          <span className="text-sm font-bold text-gray-700">Question {idx + 1}</span>
+                          <button
+                            onClick={() => applyOCRQuestion(result, idx)}
+                            className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm inline-flex items-center gap-1 transition"
+                          >
+                            <Plus className="w-3 h-3" />
+                            Use This Question
+                          </button>
+                        </div>
+
+                        {/* Editable question */}
+                        <div className="mb-2">
+                          <label className="text-xs font-medium text-gray-500">Question</label>
+                          <textarea
+                            value={result.question}
+                            onChange={e => {
+                              setOcrResults(prev => {
+                                const updated = [...prev];
+                                updated[idx] = { ...updated[idx], question: e.target.value };
+                                return updated;
+                              });
+                            }}
+                            className="w-full px-3 py-2 border rounded text-sm mt-1"
+                            rows={2}
+                          />
+                        </div>
+
+                        {/* Editable options */}
+                        <div className="grid grid-cols-2 gap-2 mb-2">
+                          {result.options.map((opt, optIdx) => (
+                            <div key={optIdx} className="flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  setOcrResults(prev => {
+                                    const updated = [...prev];
+                                    updated[idx] = { ...updated[idx], correct: optIdx };
+                                    return updated;
+                                  });
+                                }}
+                                className={`w-7 h-7 rounded-full text-xs font-bold shrink-0 transition ${
+                                  result.correct === optIdx
+                                    ? 'bg-green-500 text-white'
+                                    : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                                }`}
+                              >
+                                {String.fromCharCode(65 + optIdx)}
+                              </button>
+                              <input
+                                type="text"
+                                value={opt}
+                                onChange={e => {
+                                  setOcrResults(prev => {
+                                    const updated = [...prev];
+                                    const newOpts = [...updated[idx].options];
+                                    newOpts[optIdx] = e.target.value;
+                                    updated[idx] = { ...updated[idx], options: newOpts };
+                                    return updated;
+                                  });
+                                }}
+                                className={`flex-1 px-3 py-1.5 border rounded text-sm ${
+                                  result.correct === optIdx ? 'border-green-400 bg-green-50' : ''
+                                }`}
+                                placeholder={`Option ${String.fromCharCode(65 + optIdx)}`}
+                              />
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Editable explanation */}
+                        <div>
+                          <label className="text-xs font-medium text-gray-500">Explanation (optional)</label>
+                          <input
+                            type="text"
+                            value={result.explanation}
+                            onChange={e => {
+                              setOcrResults(prev => {
+                                const updated = [...prev];
+                                updated[idx] = { ...updated[idx], explanation: e.target.value };
+                                return updated;
+                              });
+                            }}
+                            className="w-full px-3 py-1.5 border rounded text-sm mt-1"
+                            placeholder="Explanation"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* No structured results — show raw text */}
+                {!ocrProcessing && ocrResults.length === 0 && ocrRawText && (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertCircle className="w-5 h-5 text-amber-600" />
+                        <span className="font-medium text-amber-800">
+                          Could not auto-detect question structure
+                        </span>
+                      </div>
+                      <p className="text-sm text-amber-700">
+                        The OCR extracted text but couldn't identify the Q/A format.
+                        You can copy the raw text and use it manually.
+                      </p>
+                    </div>
+
+                    <div className="p-3 bg-gray-50 rounded-lg border">
+                      <label className="text-xs font-medium text-gray-500 block mb-1">Extracted Text</label>
+                      <textarea
+                        value={ocrRawText}
+                        onChange={e => setOcrRawText(e.target.value)}
+                        className="w-full px-3 py-2 border rounded text-sm font-mono"
+                        rows={8}
+                      />
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={applyOCRToRawText}
+                        className="px-5 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm inline-flex items-center gap-2 transition"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Use as Question Text
+                      </button>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(ocrRawText);
+                          alert('Copied to clipboard!');
+                        }}
+                        className="px-5 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition"
+                      >
+                        Copy to Clipboard
+                      </button>
+                      <button
+                        onClick={() => {
+                          // Try re-parsing after user edits
+                          const parsed = parseOCRText(ocrRawText);
+                          if (parsed.length > 0) {
+                            setOcrResults(parsed);
+                          } else {
+                            alert('Still could not detect question structure. Make sure the text follows:\nQ1. question\nA) option\nB) option\nC) option\nD) option\nCorrect: A');
+                          }
+                        }}
+                        className="px-5 py-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200 text-sm inline-flex items-center gap-2 transition"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        Re-parse
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* OCR Modal */}
+      {renderOCRModal()}
+
       {/* Nav */}
       <nav className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
@@ -1552,6 +2023,19 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             <span className="text-xl font-bold">Teacher Dashboard</span>
           </div>
           <div className="flex items-center gap-4">
+            {/* Draft indicator */}
+            {drafts.length > 0 && (
+              <button
+                onClick={() => setShowDraftsList(!showDraftsList)}
+                className="relative px-3 py-1.5 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 text-sm font-medium inline-flex items-center gap-1.5 border border-amber-200 transition"
+              >
+                <Save className="w-4 h-4" />
+                Drafts
+                <span className="bg-amber-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
+                  {drafts.length}
+                </span>
+              </button>
+            )}
             <span className="text-gray-600">Welcome, {user?.name}</span>
             <button
               onClick={onLogout}
@@ -1565,6 +2049,83 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Drafts panel */}
+        {showDraftsList && drafts.length > 0 && (
+          <div className="mb-6 bg-white rounded-lg shadow-lg border-2 border-amber-200 overflow-hidden">
+            <div className="px-5 py-3 bg-amber-50 border-b border-amber-200 flex justify-between items-center">
+              <h3 className="font-bold text-amber-800 flex items-center gap-2">
+                <Save className="w-5 h-5" />
+                Saved Drafts ({drafts.length})
+              </h3>
+              <button
+                onClick={() => setShowDraftsList(false)}
+                className="text-gray-500 hover:text-gray-700 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="divide-y max-h-80 overflow-y-auto">
+              {drafts.map(draft => (
+                <div
+                  key={draft.id}
+                  className={`px-5 py-4 flex justify-between items-center hover:bg-gray-50 transition ${
+                    currentDraftId === draft.id ? 'bg-indigo-50 border-l-4 border-indigo-500' : ''
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="font-semibold text-gray-800 truncate">
+                        {draft.title || 'Untitled Draft'}
+                      </h4>
+                      {currentDraftId === draft.id && (
+                        <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+                          Current
+                        </span>
+                      )}
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                        draft.testType === 'mock'
+                          ? 'bg-violet-100 text-violet-700'
+                          : 'bg-indigo-100 text-indigo-700'
+                      }`}>
+                        {draft.testType === 'mock' ? `Mock (${draft.stream})` : 'Custom'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {draft.selectedSubjects.map(sub => {
+                        const info = getSubjectInfo(sub);
+                        const qCount = draft.sections.find(s => s.subject === sub)?.questions.length || 0;
+                        return (
+                          <span key={sub} className={`px-2 py-0.5 rounded-full text-xs ${info.badgeColor}`}>
+                            {info.label}: {qCount}Q
+                          </span>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {getDraftQuestionCount(draft)} questions total • Saved {formatDraftDate(draft.lastSaved)}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 ml-4 shrink-0">
+                    <button
+                      onClick={() => loadDraft(draft)}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm inline-flex items-center gap-1 transition"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      {currentDraftId === draft.id ? 'Continue' : 'Load'}
+                    </button>
+                    <button
+                      onClick={() => deleteDraft(draft.id)}
+                      className="px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 text-sm transition"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Tab buttons */}
         <div className="flex gap-4 mb-6 overflow-x-auto">
           {['tests', 'create-test', 'materials'].map(tab => (
@@ -1577,10 +2138,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   : 'bg-white text-gray-600 hover:bg-gray-100'
               }`}
             >
-              {tab
-                .split('-')
-                .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-                .join(' ')}
+              {tab.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
             </button>
           ))}
         </div>
@@ -1623,7 +2181,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         )}
                       </div>
 
-                      {/* Section badges */}
                       <div className="flex flex-wrap gap-2 mt-2">
                         {t.sections?.map(s => {
                           const info = getSubjectInfo(s.subject);
@@ -1632,22 +2189,16 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               key={s.subject}
                               className={`px-3 py-1 rounded-full text-xs font-medium ${info.badgeColor}`}
                             >
-                              {info.label}:{' '}
-                              {s.questions?.length || 0}Q ×{' '}
-                              {s.marksPerQuestion ||
-                                getMarksPerQuestion(s.subject)}
-                              m
+                              {info.label}: {s.questions?.length || 0}Q × {s.marksPerQuestion || getMarksPerQuestion(s.subject)}m
                             </span>
                           );
                         })}
                       </div>
 
                       <p className="text-sm text-gray-500 mt-2">
-                        {getTotalQuestions(t)} questions |{' '}
-                        {getTotalMarks(t)} marks
+                        {getTotalQuestions(t)} questions | {getTotalMarks(t)} marks
                       </p>
 
-                      {/* Timing info */}
                       {(t.testType === 'mock' || t.testType === 'custom') && (
                         <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
                           <Clock className="w-3 h-3" />
@@ -1656,44 +2207,25 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       )}
 
                       <div className="flex gap-2 mt-3 flex-wrap">
-                        <span
-                          className={`px-3 py-1 rounded text-sm ${
-                            t.approved
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}
-                        >
+                        <span className={`px-3 py-1 rounded text-sm ${
+                          t.approved ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                        }`}>
                           {t.approved ? 'Approved' : 'Pending Approval'}
                         </span>
                         {t.approved && (
-                          <span
-                            className={`px-3 py-1 rounded text-sm ${
-                              t.active
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-gray-100 text-gray-800'
-                            }`}
-                          >
+                          <span className={`px-3 py-1 rounded text-sm ${
+                            t.active ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
+                          }`}>
                             {t.active ? 'Active' : 'Inactive'}
                           </span>
                         )}
-                        {/* Answer key visibility badge */}
-                        <span
-                          className={`px-3 py-1 rounded text-sm inline-flex items-center gap-1 ${
-                            t.showAnswerKey
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-red-50 text-red-700'
-                          }`}
-                        >
+                        <span className={`px-3 py-1 rounded text-sm inline-flex items-center gap-1 ${
+                          t.showAnswerKey ? 'bg-emerald-100 text-emerald-800' : 'bg-red-50 text-red-700'
+                        }`}>
                           {t.showAnswerKey ? (
-                            <>
-                              <Eye className="w-3 h-3" />
-                              Answer Key Visible
-                            </>
+                            <><Eye className="w-3 h-3" />Answer Key Visible</>
                           ) : (
-                            <>
-                              <EyeOff className="w-3 h-3" />
-                              Answer Key Hidden
-                            </>
+                            <><EyeOff className="w-3 h-3" />Answer Key Hidden</>
                           )}
                         </span>
                       </div>
@@ -1703,47 +2235,29 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       {t.approved && (
                         <button
                           disabled={actionLoading === t._id}
-                          onClick={() =>
-                            handleToggleActive(t._id, t.active)
-                          }
+                          onClick={() => handleToggleActive(t._id, t.active)}
                           className={`px-4 py-2 rounded-lg disabled:opacity-60 whitespace-nowrap text-sm ${
                             t.active
                               ? 'bg-red-600 text-white hover:bg-red-700'
                               : 'bg-green-600 text-white hover:bg-green-700'
                           }`}
                         >
-                          {actionLoading === t._id
-                            ? '...'
-                            : t.active
-                            ? 'Deactivate'
-                            : 'Activate'}
+                          {actionLoading === t._id ? '...' : t.active ? 'Deactivate' : 'Activate'}
                         </button>
                       )}
-
-                      {/* Answer key toggle button */}
                       <button
                         disabled={actionLoading === `answerkey-${t._id}`}
-                        onClick={() =>
-                          handleToggleAnswerKey(t._id, t.showAnswerKey)
-                        }
+                        onClick={() => handleToggleAnswerKey(t._id, t.showAnswerKey)}
                         className={`px-4 py-2 rounded-lg disabled:opacity-60 whitespace-nowrap text-sm inline-flex items-center gap-1 ${
                           t.showAnswerKey
                             ? 'bg-red-100 text-red-700 hover:bg-red-200 border border-red-300'
                             : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border border-emerald-300'
                         }`}
                       >
-                        {actionLoading === `answerkey-${t._id}` ? (
-                          '...'
-                        ) : t.showAnswerKey ? (
-                          <>
-                            <EyeOff className="w-3.5 h-3.5" />
-                            Hide Answers
-                          </>
+                        {actionLoading === `answerkey-${t._id}` ? '...' : t.showAnswerKey ? (
+                          <><EyeOff className="w-3.5 h-3.5" />Hide Answers</>
                         ) : (
-                          <>
-                            <Eye className="w-3.5 h-3.5" />
-                            Show Answers
-                          </>
+                          <><Eye className="w-3.5 h-3.5" />Show Answers</>
                         )}
                       </button>
                     </div>
@@ -1757,55 +2271,108 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         {/* ======================== CREATE TEST TAB ======================== */}
         {activeTab === 'create-test' && (
           <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-bold mb-6">Create Test</h2>
+            {/* Header with draft controls */}
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h2 className="text-xl font-bold">Create Test</h2>
+                {currentDraftId && (
+                  <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                    <Save className="w-3 h-3" />
+                    Editing draft — auto-saving changes
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2 items-center">
+                {/* Auto-save indicator */}
+                {draftSaveStatus === 'saving' && (
+                  <span className="text-xs text-gray-400 inline-flex items-center gap-1 animate-pulse">
+                    <RefreshCw className="w-3 h-3 animate-spin" /> Saving...
+                  </span>
+                )}
+                {draftSaveStatus === 'saved' && (
+                  <span className="text-xs text-green-600 inline-flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" /> Saved
+                  </span>
+                )}
+
+                {/* Manual save */}
+                <button
+                  onClick={saveDraftManually}
+                  className="px-4 py-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 text-sm font-medium inline-flex items-center gap-1.5 border border-amber-200 transition"
+                >
+                  <Save className="w-4 h-4" />
+                  Save Draft
+                </button>
+
+                {/* View drafts */}
+                {drafts.length > 0 && (
+                  <button
+                    onClick={() => setShowDraftsList(true)}
+                    className="px-4 py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 text-sm inline-flex items-center gap-1.5 border transition"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Drafts ({drafts.length})
+                  </button>
+                )}
+
+                {/* New test (clear form) */}
+                {(currentDraftId || testTitle || selectedSubjects.length > 0) && (
+                  <button
+                    onClick={() => {
+                      if (confirm('Start a new test? Current unsaved changes will be lost (drafts are preserved).')) {
+                        setTestTitle('');
+                        setTestCourse('');
+                        setSelectedSubjects([]);
+                        setSections([]);
+                        setCurrentSection(0);
+                        setTestType('mock');
+                        setStream('PCM');
+                        setPhyChemTime(90);
+                        setMathBioTime(90);
+                        setCustomDuration(60);
+                        setShowAnswerKeyOnCreate(false);
+                        resetQuestionForm();
+                        setCurrentDraftId(null);
+                      }
+                    }}
+                    className="px-4 py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 text-sm inline-flex items-center gap-1.5 border transition"
+                  >
+                    <Plus className="w-4 h-4" />
+                    New Test
+                  </button>
+                )}
+              </div>
+            </div>
 
             {/* Subject selection */}
             <div className="mb-6 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
-              <h3 className="font-semibold text-indigo-800 mb-3">
-                📚 Select Subjects
-              </h3>
+              <h3 className="font-semibold text-indigo-800 mb-3">📚 Select Subjects</h3>
               <p className="text-sm text-indigo-600 mb-3">
                 Choose one or more subjects. Use presets for quick PCM/PCB mock tests,
                 or pick any combination for a custom timed test.
                 <br />
                 <span className="text-xs">
-                  Maths (2 marks/Q) and Biology (1 mark/Q) are optional
-                  alternatives.
+                  Maths (2 marks/Q) and Biology (1 mark/Q) are optional alternatives.
                 </span>
               </p>
 
-              {/* Quick presets */}
               <div className="flex flex-wrap gap-2 mb-3">
-                <span className="text-xs font-medium text-gray-500 self-center mr-1">
-                  Presets:
-                </span>
-                <button
-                  onClick={() => applyPreset('pcm')}
-                  className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition"
-                >
+                <span className="text-xs font-medium text-gray-500 self-center mr-1">Presets:</span>
+                <button onClick={() => applyPreset('pcm')} className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition">
                   PCM (Phy + Chem + Maths)
                 </button>
-                <button
-                  onClick={() => applyPreset('pcb')}
-                  className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition"
-                >
+                <button onClick={() => applyPreset('pcb')} className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition">
                   PCB (Phy + Chem + Bio)
                 </button>
-                <button
-                  onClick={() => applyPreset('pcmb')}
-                  className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition"
-                >
+                <button onClick={() => applyPreset('pcmb')} className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition">
                   All 4 Subjects
                 </button>
               </div>
 
-              {/* Subject toggles */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {ALL_SUBJECTS.map(sub => {
                   const isSelected = selectedSubjects.includes(sub.key);
-                  const qCount =
-                    sections.find(s => s.subject === sub.key)
-                      ?.questions.length || 0;
+                  const qCount = sections.find(s => s.subject === sub.key)?.questions.length || 0;
                   return (
                     <button
                       key={sub.key}
@@ -1817,24 +2384,17 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium text-sm">
-                          {sub.label}
-                        </span>
+                        <span className="font-medium text-sm">{sub.label}</span>
                         {isSelected ? (
-                          <span className="w-5 h-5 bg-green-500 text-white rounded-full flex items-center justify-center text-xs">
-                            ✓
-                          </span>
+                          <span className="w-5 h-5 bg-green-500 text-white rounded-full flex items-center justify-center text-xs">✓</span>
                         ) : (
                           <Plus className="w-4 h-4 text-gray-400" />
                         )}
                       </div>
                       <div className="text-xs mt-1 text-gray-500">
-                        {sub.marks} mark
-                        {sub.marks > 1 ? 's' : ''}/Q
+                        {sub.marks} mark{sub.marks > 1 ? 's' : ''}/Q
                         {isSelected && qCount > 0 && (
-                          <span className="ml-1 font-medium text-green-600">
-                            • {qCount}Q added
-                          </span>
+                          <span className="ml-1 font-medium text-green-600">• {qCount}Q added</span>
                         )}
                       </div>
                     </button>
@@ -1845,18 +2405,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
               {selectedSubjects.length > 0 && (
                 <div className="mt-3 text-sm">
                   <span className="font-medium">
-                    {testType === 'mock'
-                      ? `📋 Mock Test (${stream}): `
-                      : '⚡ Custom Test: '}
+                    {testType === 'mock' ? `📋 Mock Test (${stream}): ` : '⚡ Custom Test: '}
                   </span>
-                  {selectedSubjects
-                    .map(s => getSubjectInfo(s).label)
-                    .join(' + ')}
+                  {selectedSubjects.map(s => getSubjectInfo(s).label).join(' + ')}
                 </div>
               )}
             </div>
 
-            {/* ======================== TEST TYPE & TIMING CONFIG ======================== */}
+            {/* Test type & timing config */}
             {selectedSubjects.length > 0 && (
               <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
                 <h3 className="font-semibold text-amber-800 mb-3 flex items-center gap-2">
@@ -1864,7 +2420,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   Test Type & Timing
                 </h3>
 
-                {/* Test type selector */}
                 <div className="flex gap-3 mb-4">
                   {isMockEligible() && (
                     <button
@@ -1876,13 +2431,11 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       }`}
                     >
                       <div className="font-semibold text-sm flex items-center gap-2">
-                        <Clock className="w-4 h-4" />
-                        Mock Test
+                        <Clock className="w-4 h-4" /> Mock Test
                       </div>
                       <p className="text-xs text-gray-500 mt-1">
                         Two-phase timing: Phy+Chem → then Maths/Bio.
-                        <br />
-                        Phase 1 auto-submits, no going back.
+                        <br />Phase 1 auto-submits, no going back.
                       </p>
                     </button>
                   )}
@@ -1895,37 +2448,27 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     }`}
                   >
                     <div className="font-semibold text-sm flex items-center gap-2">
-                      <Clock className="w-4 h-4" />
-                      Custom Timed Test
+                      <Clock className="w-4 h-4" /> Custom Timed Test
                     </div>
                     <p className="text-xs text-gray-500 mt-1">
                       Single timer for all subjects.
-                      <br />
-                      Students can switch between subjects freely.
+                      <br />Students can switch between subjects freely.
                     </p>
                   </button>
                 </div>
 
-                {/* Mock test timing config */}
                 {testType === 'mock' && isMockEligible() && (
                   <div className="bg-white rounded-lg border p-4">
-                    <h4 className="font-medium text-sm text-gray-700 mb-3">
-                      ⏱ Mock Test Timing Configuration
-                    </h4>
+                    <h4 className="font-medium text-sm text-gray-700 mb-3">⏱ Mock Test Timing Configuration</h4>
 
-                    {/* Stream selector */}
                     {selectedSubjects.includes('maths') && selectedSubjects.includes('biology') && (
                       <div className="mb-3">
-                        <label className="text-xs font-medium text-gray-600 block mb-1">
-                          Stream
-                        </label>
+                        <label className="text-xs font-medium text-gray-600 block mb-1">Stream</label>
                         <div className="flex gap-2">
                           <button
                             onClick={() => setStream('PCM')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                              stream === 'PCM'
-                                ? 'bg-purple-600 text-white'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              stream === 'PCM' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                             }`}
                           >
                             PCM (Physics, Chemistry, Maths)
@@ -1933,9 +2476,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                           <button
                             onClick={() => setStream('PCB')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                              stream === 'PCB'
-                                ? 'bg-orange-600 text-white'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              stream === 'PCB' ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                             }`}
                           >
                             PCB (Physics, Chemistry, Biology)
@@ -1950,32 +2491,22 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                           Phase 1: Physics + Chemistry (minutes)
                         </label>
                         <input
-                          type="number"
-                          min={1}
-                          max={300}
-                          value={phyChemTime}
+                          type="number" min={1} max={300} value={phyChemTime}
                           onChange={e => setPhyChemTime(Math.max(1, parseInt(e.target.value) || 90))}
                           className="w-full px-4 py-2 border rounded-lg"
                         />
-                        <p className="text-xs text-gray-400 mt-1">
-                          Auto-submits when time expires. Students can submit early.
-                        </p>
+                        <p className="text-xs text-gray-400 mt-1">Auto-submits when time expires.</p>
                       </div>
                       <div>
                         <label className="text-xs font-medium text-gray-600 block mb-1">
                           Phase 2: {stream === 'PCB' ? 'Biology' : 'Mathematics'} (minutes)
                         </label>
                         <input
-                          type="number"
-                          min={1}
-                          max={300}
-                          value={mathBioTime}
+                          type="number" min={1} max={300} value={mathBioTime}
                           onChange={e => setMathBioTime(Math.max(1, parseInt(e.target.value) || 90))}
                           className="w-full px-4 py-2 border rounded-lg"
                         />
-                        <p className="text-xs text-gray-400 mt-1">
-                          Starts after Phase 1 is submitted. Cannot go back.
-                        </p>
+                        <p className="text-xs text-gray-400 mt-1">Starts after Phase 1 is submitted.</p>
                       </div>
                     </div>
 
@@ -1992,48 +2523,30 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   </div>
                 )}
 
-                {/* Custom test timing config */}
                 {testType === 'custom' && (
                   <div className="bg-white rounded-lg border p-4">
-                    <h4 className="font-medium text-sm text-gray-700 mb-3">
-                      ⏱ Custom Test Duration
-                    </h4>
+                    <h4 className="font-medium text-sm text-gray-700 mb-3">⏱ Custom Test Duration</h4>
                     <div>
-                      <label className="text-xs font-medium text-gray-600 block mb-1">
-                        Total Duration (minutes)
-                      </label>
+                      <label className="text-xs font-medium text-gray-600 block mb-1">Total Duration (minutes)</label>
                       <input
-                        type="number"
-                        min={1}
-                        max={600}
-                        value={customDuration}
+                        type="number" min={1} max={600} value={customDuration}
                         onChange={e => setCustomDuration(Math.max(1, parseInt(e.target.value) || 60))}
                         className="w-full px-4 py-2 border rounded-lg"
                       />
-                      <p className="text-xs text-gray-400 mt-1">
-                        Single timer for all subjects. Students can freely switch between subjects.
-                      </p>
+                      <p className="text-xs text-gray-400 mt-1">Single timer for all subjects.</p>
                     </div>
-
                     <div className="mt-3 p-3 bg-indigo-50 rounded border border-indigo-200">
                       <p className="text-sm text-indigo-800">
-                        <strong>Subjects:</strong>{' '}
-                        {selectedSubjects.map(s => getSubjectInfo(s).label).join(', ')}
-                        <br />
-                        <strong>Duration:</strong> {customDuration} minutes total
+                        <strong>Subjects:</strong> {selectedSubjects.map(s => getSubjectInfo(s).label).join(', ')}
+                        <br /><strong>Duration:</strong> {customDuration} minutes total
                       </p>
                     </div>
                   </div>
                 )}
 
-                {/* Answer key visibility setting */}
                 <div className="mt-4 bg-white rounded-lg border p-4">
                   <h4 className="font-medium text-sm text-gray-700 mb-2 flex items-center gap-2">
-                    {showAnswerKeyOnCreate ? (
-                      <Eye className="w-4 h-4 text-emerald-600" />
-                    ) : (
-                      <EyeOff className="w-4 h-4 text-red-500" />
-                    )}
+                    {showAnswerKeyOnCreate ? <Eye className="w-4 h-4 text-emerald-600" /> : <EyeOff className="w-4 h-4 text-red-500" />}
                     Answer Key & Explanations
                   </h4>
                   <div className="flex items-center gap-3">
@@ -2043,22 +2556,18 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         showAnswerKeyOnCreate ? 'bg-emerald-500' : 'bg-gray-300'
                       }`}
                     >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          showAnswerKeyOnCreate ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        showAnswerKeyOnCreate ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
                     </button>
                     <div>
                       <p className="text-sm font-medium">
-                        {showAnswerKeyOnCreate
-                          ? 'Answer key visible to students immediately'
-                          : 'Answer key hidden from students'}
+                        {showAnswerKeyOnCreate ? 'Answer key visible to students immediately' : 'Answer key hidden from students'}
                       </p>
                       <p className="text-xs text-gray-500">
                         {showAnswerKeyOnCreate
                           ? 'Students will see correct answers and explanations after submitting.'
-                          : 'Students will only see their score. You can enable answer key later from the Tests tab.'}
+                          : 'Students will only see their score. You can enable answer key later.'}
                       </p>
                     </div>
                   </div>
@@ -2071,123 +2580,79 @@ const TeacherView: React.FC<TeacherViewProps> = ({
               <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
                 <h3 className="font-bold mb-2 flex items-center gap-2">
                   <Upload className="w-5 h-5" />
-                  {selectedSubjects.length > 1
-                    ? 'Quick Import Full Test'
-                    : 'Quick Import Questions'}
+                  {selectedSubjects.length > 1 ? 'Quick Import Full Test' : 'Quick Import Questions'}
                 </h3>
 
                 <div className="text-sm text-gray-600 mb-3 p-3 bg-white rounded border">
-                  <p className="font-medium mb-2">
-                    📋 Supported Formats:
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <p className="font-medium mb-2">📋 Supported Formats:</p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div className="p-2 bg-green-50 rounded border border-green-200">
-                      <p className="font-medium text-green-800">
-                        📊 Excel (.xlsx)
-                      </p>
+                      <p className="font-medium text-green-800">📊 Excel (.xlsx)</p>
                       <p className="text-xs text-green-700 mt-1">
                         {selectedSubjects.length > 1
-                          ? `Sheets: ${selectedSubjects
-                              .map(s => getSubjectInfo(s).label)
-                              .join(', ')}`
+                          ? `Sheets: ${selectedSubjects.map(s => getSubjectInfo(s).label).join(', ')}`
                           : 'Single sheet with questions'}
-                        <br />
-                        13 columns including image support
+                        <br />13 columns including image support
                       </p>
                     </div>
                     <div className="p-2 bg-blue-50 rounded border border-blue-200">
-                      <p className="font-medium text-blue-800">
-                        📝 Word (.docx)
-                      </p>
+                      <p className="font-medium text-blue-800">📝 Word (.docx)</p>
                       <p className="text-xs text-blue-700 mt-1">
                         Paste images directly!
-                        <br />
-                        {selectedSubjects.length > 1
-                          ? 'Use === SUBJECT === headers'
-                          : 'Q1. → A) B) C) D) format'}
+                        <br />{selectedSubjects.length > 1 ? 'Use === SUBJECT === headers' : 'Q1. → A) B) C) D) format'}
+                      </p>
+                    </div>
+                    <div className="p-2 bg-violet-50 rounded border border-violet-200">
+                      <p className="font-medium text-violet-800">📸 Image (OCR)</p>
+                      <p className="text-xs text-violet-700 mt-1">
+                        Upload or capture photo
+                        <br />Auto-extract questions & options
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* Templates */}
                 <div className="mb-3">
-                  <p className="text-sm font-medium text-gray-700 mb-2">
-                    📥 Download Templates:
-                  </p>
+                  <p className="text-sm font-medium text-gray-700 mb-2">📥 Download Templates:</p>
                   <div className="flex flex-wrap gap-2">
                     {selectedSubjects.length > 1 ? (
                       <>
-                        <button
-                          type="button"
-                          onClick={downloadMockTestTemplate}
-                          className="px-4 py-2 bg-white border border-green-300 rounded-lg text-sm hover:bg-green-50 inline-flex items-center gap-2"
-                        >
-                          <Download className="w-4 h-4 text-green-600" />
-                          Excel Template
+                        <button type="button" onClick={downloadMockTestTemplate} className="px-4 py-2 bg-white border border-green-300 rounded-lg text-sm hover:bg-green-50 inline-flex items-center gap-2">
+                          <Download className="w-4 h-4 text-green-600" /> Excel Template
                         </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            downloadWordTemplate('mock')
-                          }
-                          className="px-4 py-2 bg-white border border-blue-300 rounded-lg text-sm hover:bg-blue-50 inline-flex items-center gap-2"
-                        >
-                          <Download className="w-4 h-4 text-blue-600" />
-                          Word Template
+                        <button type="button" onClick={() => downloadWordTemplate('mock')} className="px-4 py-2 bg-white border border-blue-300 rounded-lg text-sm hover:bg-blue-50 inline-flex items-center gap-2">
+                          <Download className="w-4 h-4 text-blue-600" /> Word Template
                         </button>
                       </>
                     ) : (
                       <>
-                        <button
-                          type="button"
-                          onClick={downloadSingleSectionTemplate}
-                          className="px-4 py-2 bg-white border border-green-300 rounded-lg text-sm hover:bg-green-50 inline-flex items-center gap-2"
-                        >
-                          <Download className="w-4 h-4 text-green-600" />
-                          Excel Template
+                        <button type="button" onClick={downloadSingleSectionTemplate} className="px-4 py-2 bg-white border border-green-300 rounded-lg text-sm hover:bg-green-50 inline-flex items-center gap-2">
+                          <Download className="w-4 h-4 text-green-600" /> Excel Template
                         </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            downloadWordTemplate('section')
-                          }
-                          className="px-4 py-2 bg-white border border-blue-300 rounded-lg text-sm hover:bg-blue-50 inline-flex items-center gap-2"
-                        >
-                          <Download className="w-4 h-4 text-blue-600" />
-                          Word Template
+                        <button type="button" onClick={() => downloadWordTemplate('section')} className="px-4 py-2 bg-white border border-blue-300 rounded-lg text-sm hover:bg-blue-50 inline-flex items-center gap-2">
+                          <Download className="w-4 h-4 text-blue-600" /> Word Template
                         </button>
                       </>
                     )}
                   </div>
                 </div>
 
-                {/* Upload for multi-subject */}
                 {selectedSubjects.length > 1 && (
                   <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">
-                      📤 Upload All Subjects at Once:
-                    </p>
+                    <p className="text-sm font-medium text-gray-700 mb-2">📤 Upload All Subjects at Once:</p>
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() =>
-                          mockFileInputRef.current?.click()
-                        }
+                        onClick={() => mockFileInputRef.current?.click()}
                         disabled={uploadingFile}
                         className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm inline-flex items-center gap-2 disabled:opacity-60"
                       >
                         <Upload className="w-4 h-4" />
-                        {uploadingFile
-                          ? 'Processing...'
-                          : 'Upload Excel or Word File'}
+                        {uploadingFile ? 'Processing...' : 'Upload Excel or Word File'}
                       </button>
                       <input
-                        ref={mockFileInputRef}
-                        type="file"
-                        accept=".xlsx,.xls,.docx"
-                        onChange={handleMockTestFileUpload}
-                        className="hidden"
+                        ref={mockFileInputRef} type="file" accept=".xlsx,.xls,.docx"
+                        onChange={handleMockTestFileUpload} className="hidden"
                       />
                     </div>
                   </div>
@@ -2198,9 +2663,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             {/* Title & Course */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div>
-                <label className="block text-sm font-medium mb-1">
-                  Test Title *
-                </label>
+                <label className="block text-sm font-medium mb-1">Test Title *</label>
                 <input
                   type="text"
                   placeholder="e.g., Physics Chapter 1 Test or JEE Mock Test 1"
@@ -2210,9 +2673,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">
-                  Course *
-                </label>
+                <label className="block text-sm font-medium mb-1">Course *</label>
                 <select
                   value={testCourse}
                   onChange={e => setTestCourse(e.target.value)}
@@ -2220,9 +2681,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 >
                   <option value="">Select Course</option>
                   {courses.map(c => (
-                    <option key={c._id} value={c._id}>
-                      {c.name}
-                    </option>
+                    <option key={c._id} value={c._id}>{c.name}</option>
                   ))}
                 </select>
               </div>
@@ -2231,7 +2690,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             {/* Section tabs & question area */}
             {sections.length > 0 && (
               <>
-                {/* Section tabs */}
                 <div className="flex gap-2 mb-4 flex-wrap">
                   {sections.map((section, idx) => {
                     const info = getSubjectInfo(section.subject);
@@ -2241,59 +2699,52 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         key={section.subject}
                         onClick={() => setCurrentSection(idx)}
                         className={`px-5 py-3 rounded-lg font-medium text-sm transition ${
-                          isActive
-                            ? info.activeColor
-                            : info.inactiveColor
+                          isActive ? info.activeColor : info.inactiveColor
                         }`}
                       >
                         {info.label} ({section.questions.length}Q)
-                        <span className="ml-1 text-xs opacity-75">
-                          {info.marks}m/Q
-                        </span>
+                        <span className="ml-1 text-xs opacity-75">{info.marks}m/Q</span>
                       </button>
                     );
                   })}
                 </div>
 
-                {/* Current section area */}
-                <div
-                  className={`border-2 rounded-lg p-5 mb-6 ${currentSubjectInfo.color}`}
-                >
+                <div className={`border-2 rounded-lg p-5 mb-6 ${currentSubjectInfo.color}`}>
                   <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-3">
                     <h3 className="text-lg font-semibold">
                       {currentSubjectInfo.label} Questions
                       <span className="text-sm font-normal text-gray-600 ml-2">
-                        ({currentSubjectInfo.marks} mark
-                        {currentSubjectInfo.marks > 1 ? 's' : ''}{' '}
-                        per question)
+                        ({currentSubjectInfo.marks} mark{currentSubjectInfo.marks > 1 ? 's' : ''} per question)
                       </span>
                     </h3>
 
-                    {/* Per-section import */}
                     <div className="flex flex-wrap gap-2">
+                      {/* OCR button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOcrImage(null);
+                          setOcrResults([]);
+                          setOcrRawText('');
+                          setShowOCRModal(true);
+                        }}
+                        className="px-3 py-1.5 bg-violet-100 border border-violet-300 rounded text-xs hover:bg-violet-200 inline-flex items-center gap-1 font-medium text-violet-700 transition"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        📸 OCR Extract
+                      </button>
+
                       <div className="flex gap-1">
-                        <button
-                          type="button"
-                          onClick={downloadSingleSectionTemplate}
-                          className="px-2 py-1 bg-white border rounded text-xs hover:bg-gray-50 inline-flex items-center gap-1"
-                        >
+                        <button type="button" onClick={downloadSingleSectionTemplate} className="px-2 py-1 bg-white border rounded text-xs hover:bg-gray-50 inline-flex items-center gap-1">
                           <Download className="w-3 h-3" /> Excel
                         </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            downloadWordTemplate('section')
-                          }
-                          className="px-2 py-1 bg-white border rounded text-xs hover:bg-gray-50 inline-flex items-center gap-1"
-                        >
+                        <button type="button" onClick={() => downloadWordTemplate('section')} className="px-2 py-1 bg-white border rounded text-xs hover:bg-gray-50 inline-flex items-center gap-1">
                           <Download className="w-3 h-3" /> Word
                         </button>
                       </div>
                       <button
                         type="button"
-                        onClick={() =>
-                          sectionFileInputRef.current?.click()
-                        }
+                        onClick={() => sectionFileInputRef.current?.click()}
                         disabled={uploadingFile}
                         className="px-2 py-1 bg-white border rounded text-xs hover:bg-gray-50 inline-flex items-center gap-1"
                       >
@@ -2301,11 +2752,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         {uploadingFile ? '...' : 'Import Excel/Word'}
                       </button>
                       <input
-                        ref={sectionFileInputRef}
-                        type="file"
-                        accept=".xlsx,.xls,.docx"
-                        onChange={handleSectionFileUpload}
-                        className="hidden"
+                        ref={sectionFileInputRef} type="file" accept=".xlsx,.xls,.docx"
+                        onChange={handleSectionFileUpload} className="hidden"
                       />
                     </div>
                   </div>
@@ -2313,8 +2761,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   {/* Add question form */}
                   <div className="bg-white rounded-lg border p-4 mb-4">
                     <h4 className="font-medium text-sm text-gray-600 mb-3">
-                      Add Question to{' '}
-                      {currentSubjectInfo.label}
+                      Add Question to {currentSubjectInfo.label}
                     </h4>
 
                     {/* Question text + image */}
@@ -2325,12 +2772,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       <textarea
                         placeholder="Question text (leave empty if using image only)"
                         value={questionForm.question}
-                        onChange={e =>
-                          setQuestionForm({
-                            ...questionForm,
-                            question: e.target.value,
-                          })
-                        }
+                        onChange={e => setQuestionForm({ ...questionForm, question: e.target.value })}
                         className="w-full px-4 py-2 border rounded-lg text-sm"
                         rows={2}
                       />
@@ -2338,41 +2780,34 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         <label className="cursor-pointer inline-flex items-center gap-1 px-3 py-1.5 bg-white border rounded-lg text-xs hover:bg-gray-100 transition">
                           <ImageIcon className="w-3 h-3 text-blue-600" />
                           Add Image
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={e =>
-                              handleImageUpload(e, 'question')
-                            }
-                            className="hidden"
-                          />
+                          <input type="file" accept="image/*" onChange={e => handleImageUpload(e, 'question')} className="hidden" />
                         </label>
+                        {/* OCR for question */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOcrImage(null);
+                            setOcrResults([]);
+                            setOcrRawText('');
+                            setShowOCRModal(true);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-violet-50 border border-violet-200 rounded-lg text-xs hover:bg-violet-100 text-violet-700 transition"
+                        >
+                          <ScanLine className="w-3 h-3" />
+                          Extract from Image
+                        </button>
                         {questionForm.questionImage && (
                           <div className="flex items-center gap-2 p-1 bg-blue-50 rounded border border-blue-200">
-                            <img
-                              src={questionForm.questionImage}
-                              alt=""
-                              className="h-12 max-w-[120px] object-contain rounded"
-                            />
+                            <img src={questionForm.questionImage} alt="" className="h-12 max-w-[120px] object-contain rounded" />
                             <button
-                              onClick={() =>
-                                setQuestionForm({
-                                  ...questionForm,
-                                  questionImage: '',
-                                })
-                              }
+                              onClick={() => setQuestionForm({ ...questionForm, questionImage: '' })}
                               className="text-red-500 hover:text-red-700 text-xs px-1"
-                            >
-                              ✕
-                            </button>
+                            >✕</button>
                           </div>
                         )}
-                        {!questionForm.question.trim() &&
-                          !questionForm.questionImage && (
-                            <span className="text-xs text-amber-600">
-                              ⚠ Need text or image
-                            </span>
-                          )}
+                        {!questionForm.question.trim() && !questionForm.questionImage && (
+                          <span className="text-xs text-amber-600">⚠ Need text or image</span>
+                        )}
                       </div>
                     </div>
 
@@ -2389,95 +2824,52 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         >
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-semibold text-gray-500">
-                              Option{' '}
-                              {String.fromCharCode(65 + idx)}
+                              Option {String.fromCharCode(65 + idx)}
                             </span>
                             <button
                               type="button"
-                              onClick={() =>
-                                setQuestionForm({
-                                  ...questionForm,
-                                  correct: idx,
-                                })
-                              }
+                              onClick={() => setQuestionForm({ ...questionForm, correct: idx })}
                               className={`px-3 py-1 rounded text-xs font-medium transition ${
                                 questionForm.correct === idx
                                   ? 'bg-green-600 text-white shadow-sm'
                                   : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
                               }`}
                             >
-                              {questionForm.correct === idx
-                                ? '✓ Correct'
-                                : 'Set Correct'}
+                              {questionForm.correct === idx ? '✓ Correct' : 'Set Correct'}
                             </button>
                           </div>
                           <input
                             type="text"
-                            placeholder={`Option ${String.fromCharCode(
-                              65 + idx
-                            )} text (or use image)`}
+                            placeholder={`Option ${String.fromCharCode(65 + idx)} text (or use image)`}
                             value={opt}
                             onChange={e => {
-                              const newOpts = [
-                                ...questionForm.options,
-                              ];
+                              const newOpts = [...questionForm.options];
                               newOpts[idx] = e.target.value;
-                              setQuestionForm({
-                                ...questionForm,
-                                options: newOpts,
-                              });
+                              setQuestionForm({ ...questionForm, options: newOpts });
                             }}
                             className="w-full px-3 py-2 border rounded text-sm mb-2"
                           />
                           <div className="flex gap-2 items-center flex-wrap">
                             <label className="cursor-pointer inline-flex items-center gap-1 px-2 py-1 bg-white border rounded text-xs hover:bg-gray-100 transition">
-                              <ImageIcon className="w-3 h-3 text-blue-600" />
-                              Image
-                              <input
-                                type="file"
-                                accept="image/*"
-                                onChange={e =>
-                                  handleImageUpload(
-                                    e,
-                                    'option',
-                                    idx
-                                  )
-                                }
-                                className="hidden"
-                              />
+                              <ImageIcon className="w-3 h-3 text-blue-600" /> Image
+                              <input type="file" accept="image/*" onChange={e => handleImageUpload(e, 'option', idx)} className="hidden" />
                             </label>
                             {questionForm.optionImages[idx] && (
                               <div className="flex items-center gap-1 p-1 bg-blue-50 rounded border border-blue-200">
-                                <img
-                                  src={
-                                    questionForm.optionImages[idx]
-                                  }
-                                  alt=""
-                                  className="h-8 max-w-[60px] object-contain rounded"
-                                />
+                                <img src={questionForm.optionImages[idx]} alt="" className="h-8 max-w-[60px] object-contain rounded" />
                                 <button
                                   onClick={() => {
-                                    const newImages = [
-                                      ...questionForm.optionImages,
-                                    ];
+                                    const newImages = [...questionForm.optionImages];
                                     newImages[idx] = '';
-                                    setQuestionForm({
-                                      ...questionForm,
-                                      optionImages: newImages,
-                                    });
+                                    setQuestionForm({ ...questionForm, optionImages: newImages });
                                   }}
                                   className="text-red-500 text-xs px-1"
-                                >
-                                  ✕
-                                </button>
+                                >✕</button>
                               </div>
                             )}
-                            {!opt.trim() &&
-                              !questionForm.optionImages[idx] && (
-                                <span className="text-xs text-amber-600">
-                                  ⚠ Need text or image
-                                </span>
-                              )}
+                            {!opt.trim() && !questionForm.optionImages[idx] && (
+                              <span className="text-xs text-amber-600">⚠ Need text or image</span>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -2491,12 +2883,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       <textarea
                         placeholder="Explanation text (optional)"
                         value={questionForm.explanation}
-                        onChange={e =>
-                          setQuestionForm({
-                            ...questionForm,
-                            explanation: e.target.value,
-                          })
-                        }
+                        onChange={e => setQuestionForm({ ...questionForm, explanation: e.target.value })}
                         className="w-full px-3 py-2 border rounded text-sm mb-2"
                         rows={2}
                       />
@@ -2504,36 +2891,90 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         <label className="cursor-pointer inline-flex items-center gap-1 px-3 py-1.5 bg-white border rounded-lg text-xs hover:bg-gray-100 transition">
                           <ImageIcon className="w-3 h-3 text-amber-600" />
                           Explanation Image
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={e =>
-                              handleImageUpload(e, 'explanation')
-                            }
-                            className="hidden"
-                          />
+                          <input type="file" accept="image/*" onChange={e => handleImageUpload(e, 'explanation')} className="hidden" />
                         </label>
+
+                        {/* OCR for explanation */}
+                        <button
+                          type="button"
+                          onClick={() => ocrExplanationFileRef.current?.click()}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-violet-50 border border-violet-200 rounded-lg text-xs hover:bg-violet-100 text-violet-700 transition"
+                        >
+                          <ScanLine className="w-3 h-3" />
+                          Extract Explanation from Image
+                        </button>
+                        <input
+                          ref={ocrExplanationFileRef}
+                          type="file" accept="image/*"
+                          onChange={e => handleOCRImageSelect(e, 'explanation')}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => ocrExplanationCameraRef.current?.click()}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs hover:bg-emerald-100 text-emerald-700 transition"
+                        >
+                          <Camera className="w-3 h-3" />
+                          Capture Explanation
+                        </button>
+                        <input
+                          ref={ocrExplanationCameraRef}
+                          type="file" accept="image/*" capture="environment"
+                          onChange={e => handleOCRImageSelect(e, 'explanation')}
+                          className="hidden"
+                        />
+
                         {questionForm.explanationImage && (
                           <div className="flex items-center gap-2 p-1 bg-amber-100 rounded border border-amber-300">
-                            <img
-                              src={questionForm.explanationImage}
-                              alt=""
-                              className="h-12 max-w-[120px] object-contain rounded"
-                            />
+                            <img src={questionForm.explanationImage} alt="" className="h-12 max-w-[120px] object-contain rounded" />
                             <button
-                              onClick={() =>
-                                setQuestionForm({
-                                  ...questionForm,
-                                  explanationImage: '',
-                                })
-                              }
+                              onClick={() => setQuestionForm({ ...questionForm, explanationImage: '' })}
                               className="text-red-500 hover:text-red-700 text-xs px-1"
-                            >
-                              ✕
-                            </button>
+                            >✕</button>
                           </div>
                         )}
                       </div>
+
+                      {/* OCR explanation result */}
+                      {ocrExplanationProcessing && (
+                        <div className="mt-3 p-3 bg-violet-50 rounded border border-violet-200">
+                          <div className="flex items-center gap-2">
+                            <RefreshCw className="w-4 h-4 text-violet-600 animate-spin" />
+                            <span className="text-sm text-violet-700">Extracting explanation text...</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {!ocrExplanationProcessing && ocrExplanationImage && ocrExplanationText && (
+                        <div className="mt-3 p-3 bg-violet-50 rounded border border-violet-200">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-xs font-medium text-violet-700">📸 Extracted Explanation</span>
+                            <button
+                              onClick={() => {
+                                setOcrExplanationImage(null);
+                                setOcrExplanationText('');
+                              }}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >✕</button>
+                          </div>
+                          <div className="flex gap-2 mb-2">
+                            <img src={ocrExplanationImage} alt="" className="h-16 object-contain rounded border" />
+                            <textarea
+                              value={ocrExplanationText}
+                              onChange={e => setOcrExplanationText(e.target.value)}
+                              className="flex-1 px-3 py-2 border rounded text-xs"
+                              rows={3}
+                            />
+                          </div>
+                          <button
+                            onClick={applyExplanationOCR}
+                            className="px-4 py-1.5 bg-violet-600 text-white rounded text-xs hover:bg-violet-700 inline-flex items-center gap-1 transition"
+                          >
+                            <CheckCircle className="w-3 h-3" />
+                            Use This Explanation (with image)
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     <button
@@ -2549,37 +2990,21 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   {currentQuestions.length > 0 && (
                     <div>
                       <h4 className="font-medium text-sm text-gray-600 mb-2">
-                        {currentSubjectInfo.label} Questions (
-                        {currentQuestions.length})
+                        {currentSubjectInfo.label} Questions ({currentQuestions.length})
                       </h4>
                       <div className="max-h-[500px] overflow-y-auto space-y-2">
                         {currentQuestions.map((q, idx) => (
-                          <div
-                            key={idx}
-                            className="p-3 bg-white rounded border text-sm"
-                          >
+                          <div key={idx} className="p-3 bg-white rounded border text-sm">
                             <div className="flex justify-between items-start">
                               <div className="flex-1 min-w-0">
-                                {/* Question */}
                                 <p className="font-medium">
-                                  Q{idx + 1}:{' '}
-                                  {q.question || (
-                                    <span className="text-gray-400 italic">
-                                      (Image question)
-                                    </span>
-                                  )}
+                                  Q{idx + 1}: {q.question || <span className="text-gray-400 italic">(Image question)</span>}
                                 </p>
                                 {q.questionImage && (
                                   <div className="mt-1">
-                                    {renderImagePreview(
-                                      q.questionImage,
-                                      'Question',
-                                      'h-20 max-w-[200px] object-contain rounded border'
-                                    )}
+                                    {renderImagePreview(q.questionImage, 'Question', 'h-20 max-w-[200px] object-contain rounded border')}
                                   </div>
                                 )}
-
-                                {/* Options */}
                                 <div className="mt-2 grid grid-cols-2 gap-1">
                                   {q.options.map((opt, optIdx) => (
                                     <div
@@ -2590,65 +3015,26 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                                           : 'text-gray-600 bg-gray-50'
                                       }`}
                                     >
-                                      <span className="font-semibold shrink-0">
-                                        {String.fromCharCode(
-                                          65 + optIdx
-                                        )}
-                                        )
-                                      </span>
+                                      <span className="font-semibold shrink-0">{String.fromCharCode(65 + optIdx)})</span>
                                       <div className="min-w-0">
-                                        {opt && (
-                                          <span>{opt}</span>
-                                        )}
-                                        {!opt &&
-                                          !q.optionImages?.[
-                                            optIdx
-                                          ] && (
-                                            <span className="text-gray-400">
-                                              (empty)
-                                            </span>
-                                          )}
-                                        {q.optionImages?.[
-                                          optIdx
-                                        ] && (
+                                        {opt && <span>{opt}</span>}
+                                        {!opt && !q.optionImages?.[optIdx] && <span className="text-gray-400">(empty)</span>}
+                                        {q.optionImages?.[optIdx] && (
                                           <div className="mt-1">
-                                            {renderImagePreview(
-                                              q.optionImages[
-                                                optIdx
-                                              ],
-                                              `Option ${String.fromCharCode(
-                                                65 + optIdx
-                                              )}`,
-                                              'h-10 max-w-[80px] object-contain rounded border'
-                                            )}
+                                            {renderImagePreview(q.optionImages[optIdx], `Option ${String.fromCharCode(65 + optIdx)}`, 'h-10 max-w-[80px] object-contain rounded border')}
                                           </div>
                                         )}
-                                        {optIdx === q.correct && (
-                                          <span className="ml-1 text-green-600">
-                                            ✓
-                                          </span>
-                                        )}
+                                        {optIdx === q.correct && <span className="ml-1 text-green-600">✓</span>}
                                       </div>
                                     </div>
                                   ))}
                                 </div>
-
-                                {/* Explanation */}
-                                {(q.explanation ||
-                                  q.explanationImage) && (
+                                {(q.explanation || q.explanationImage) && (
                                   <div className="mt-2 p-2 bg-amber-50 rounded border border-amber-200">
-                                    {q.explanation && (
-                                      <p className="text-xs text-amber-800">
-                                        💡 {q.explanation}
-                                      </p>
-                                    )}
+                                    {q.explanation && <p className="text-xs text-amber-800">💡 {q.explanation}</p>}
                                     {q.explanationImage && (
                                       <div className="mt-1">
-                                        {renderImagePreview(
-                                          q.explanationImage,
-                                          'Explanation',
-                                          'h-14 max-w-[150px] object-contain rounded border'
-                                        )}
+                                        {renderImagePreview(q.explanationImage, 'Explanation', 'h-14 max-w-[150px] object-contain rounded border')}
                                       </div>
                                     )}
                                   </div>
@@ -2656,12 +3042,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               </div>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  removeQuestion(
-                                    currentSection,
-                                    idx
-                                  )
-                                }
+                                onClick={() => removeQuestion(currentSection, idx)}
                                 className="text-red-500 hover:text-red-700 ml-2 shrink-0"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -2676,95 +3057,60 @@ const TeacherView: React.FC<TeacherViewProps> = ({
               </>
             )}
 
-            {/* Empty state when no subjects selected */}
             {sections.length === 0 && (
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center mb-6">
                 <BookOpen className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-gray-500 text-lg">
-                  Select subjects above to start adding questions
-                </p>
+                <p className="text-gray-500 text-lg">Select subjects above to start adding questions</p>
                 <p className="text-gray-400 text-sm mt-1">
                   You can create a mock test (PCM/PCB) or a custom timed test
                 </p>
+                {drafts.length > 0 && (
+                  <button
+                    onClick={() => setShowDraftsList(true)}
+                    className="mt-4 px-6 py-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 border border-amber-200 inline-flex items-center gap-2 transition"
+                  >
+                    <Save className="w-4 h-4" />
+                    Continue from Draft ({drafts.length} saved)
+                  </button>
+                )}
               </div>
             )}
 
             {/* Test summary */}
             {sections.length > 0 && (
               <div className="bg-gray-50 border rounded-lg p-4 mb-6">
-                <h4 className="font-semibold mb-2">
-                  📊 Test Summary
-                </h4>
-                <div
-                  className={`grid gap-4 text-sm ${
-                    sections.length === 1
-                      ? 'grid-cols-1'
-                      : sections.length <= 3
-                      ? 'grid-cols-3'
-                      : 'grid-cols-4'
-                  }`}
-                >
+                <h4 className="font-semibold mb-2">📊 Test Summary</h4>
+                <div className={`grid gap-4 text-sm ${
+                  sections.length === 1 ? 'grid-cols-1' : sections.length <= 3 ? 'grid-cols-3' : 'grid-cols-4'
+                }`}>
                   {sections.map(s => {
                     const info = getSubjectInfo(s.subject);
                     const imageQCount = s.questions.filter(
-                      q =>
-                        q.questionImage ||
-                        q.explanationImage ||
-                        q.optionImages?.some(img => img)
+                      q => q.questionImage || q.explanationImage || q.optionImages?.some(img => img)
                     ).length;
                     return (
                       <div key={s.subject}>
-                        <span className="text-gray-600">
-                          {info.label}:
-                        </span>{' '}
-                        <strong>
-                          {s.questions.length} Q × {info.marks} ={' '}
-                          {s.questions.length * info.marks} marks
-                        </strong>
+                        <span className="text-gray-600">{info.label}:</span>{' '}
+                        <strong>{s.questions.length} Q × {info.marks} = {s.questions.length * info.marks} marks</strong>
                         {imageQCount > 0 && (
-                          <span className="text-xs text-blue-600 block">
-                            📸 {imageQCount} with images
-                          </span>
+                          <span className="text-xs text-blue-600 block">📸 {imageQCount} with images</span>
                         )}
                       </div>
                     );
                   })}
                 </div>
                 <div className="mt-2 text-sm font-semibold border-t pt-2">
-                  {testType === 'mock' ? (
-                    <span>📋 Mock Test ({stream})</span>
-                  ) : (
-                    <span>⚡ Custom Test</span>
-                  )}
+                  {testType === 'mock' ? <span>📋 Mock Test ({stream})</span> : <span>⚡ Custom Test</span>}
                   {' — Total: '}
-                  {sections.reduce(
-                    (sum, s) => sum + s.questions.length,
-                    0
-                  )}{' '}
-                  questions |{' '}
-                  {sections.reduce(
-                    (sum, s) =>
-                      sum +
-                      s.questions.length *
-                        getMarksPerQuestion(s.subject),
-                    0
-                  )}{' '}
-                  marks |{' '}
-                  {testType === 'mock'
-                    ? `${phyChemTime + mathBioTime} min`
-                    : `${customDuration} min`}
+                  {sections.reduce((sum, s) => sum + s.questions.length, 0)} questions |{' '}
+                  {sections.reduce((sum, s) => sum + s.questions.length * getMarksPerQuestion(s.subject), 0)} marks |{' '}
+                  {testType === 'mock' ? `${phyChemTime + mathBioTime} min` : `${customDuration} min`}
                 </div>
                 <div className="mt-1 text-xs text-gray-500 flex items-center gap-1">
                   {showAnswerKeyOnCreate ? (
-                    <>
-                      <Eye className="w-3 h-3 text-emerald-600" />
-                      Answer key will be visible to students
-                    </>
+                    <><Eye className="w-3 h-3 text-emerald-600" /> Answer key will be visible to students</>
                   ) : (
-                    <>
-                      <EyeOff className="w-3 h-3 text-red-500" />
-                      Answer key hidden until you enable it
-                    </>
+                    <><EyeOff className="w-3 h-3 text-red-500" /> Answer key hidden until you enable it</>
                   )}
                 </div>
               </div>
@@ -2772,15 +3118,22 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
             {/* Submit button */}
             {sections.length > 0 && (
-              <button
-                disabled={actionLoading === 'create'}
-                onClick={createTest}
-                className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-60 transition"
-              >
-                {actionLoading === 'create'
-                  ? 'Creating...'
-                  : 'Submit Test for Approval'}
-              </button>
+              <div className="flex gap-3">
+                <button
+                  disabled={actionLoading === 'create'}
+                  onClick={createTest}
+                  className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-60 transition"
+                >
+                  {actionLoading === 'create' ? 'Creating...' : 'Submit Test for Approval'}
+                </button>
+                <button
+                  onClick={saveDraftManually}
+                  className="px-6 py-3 bg-amber-50 text-amber-700 rounded-lg font-medium hover:bg-amber-100 border border-amber-200 inline-flex items-center gap-2 transition"
+                >
+                  <Save className="w-5 h-5" />
+                  Save as Draft
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -2788,66 +3141,32 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         {/* ======================== MATERIALS TAB ======================== */}
         {activeTab === 'materials' && (
           <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-bold mb-6">
-              Upload Study Material
-            </h2>
+            <h2 className="text-xl font-bold mb-6">Upload Study Material</h2>
             <div className="space-y-4">
               <input
-                type="text"
-                placeholder="Material Title"
+                type="text" placeholder="Material Title"
                 value={materialForm.title}
-                onChange={e =>
-                  setMaterialForm({
-                    ...materialForm,
-                    title: e.target.value,
-                  })
-                }
+                onChange={e => setMaterialForm({ ...materialForm, title: e.target.value })}
                 className="w-full px-4 py-2 border rounded-lg"
               />
-
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <select
                   value={materialForm.course}
-                  onChange={e =>
-                    setMaterialForm({
-                      ...materialForm,
-                      course: e.target.value,
-                    })
-                  }
+                  onChange={e => setMaterialForm({ ...materialForm, course: e.target.value })}
                   className="px-4 py-2 border rounded-lg"
                 >
                   <option value="">Select Course</option>
-                  {courses.map(c => (
-                    <option key={c._id} value={c._id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  {courses.map(c => <option key={c._id} value={c._id}>{c.name}</option>)}
                 </select>
-
                 <input
-                  type="text"
-                  placeholder="Subject"
+                  type="text" placeholder="Subject"
                   value={materialForm.subject}
-                  onChange={e =>
-                    setMaterialForm({
-                      ...materialForm,
-                      subject: e.target.value,
-                    })
-                  }
+                  onChange={e => setMaterialForm({ ...materialForm, subject: e.target.value })}
                   className="px-4 py-2 border rounded-lg"
                 />
-
                 <select
                   value={materialForm.type}
-                  onChange={e =>
-                    setMaterialForm({
-                      ...materialForm,
-                      type: e.target.value as
-                        | 'notes'
-                        | 'video'
-                        | 'pdf',
-                    })
-                  }
+                  onChange={e => setMaterialForm({ ...materialForm, type: e.target.value as 'notes' | 'video' | 'pdf' })}
                   className="px-4 py-2 border rounded-lg"
                 >
                   <option value="notes">Notes</option>
@@ -2855,115 +3174,63 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   <option value="pdf">PDF Link</option>
                 </select>
               </div>
-
               <textarea
                 placeholder="Content (Notes or URL)"
                 value={materialForm.content}
-                onChange={e =>
-                  setMaterialForm({
-                    ...materialForm,
-                    content: e.target.value,
-                  })
-                }
-                className="w-full px-4 py-2 border rounded-lg"
-                rows={5}
+                onChange={e => setMaterialForm({ ...materialForm, content: e.target.value })}
+                className="w-full px-4 py-2 border rounded-lg" rows={5}
               />
-
               <button
                 disabled={actionLoading === 'material'}
                 onClick={async () => {
-                  if (
-                    materialForm.title &&
-                    materialForm.content &&
-                    materialForm.course &&
-                    materialForm.subject
-                  ) {
+                  if (materialForm.title && materialForm.content && materialForm.course && materialForm.subject) {
                     try {
                       setActionLoading('material');
                       await api('materials', 'POST', {
-                        title: materialForm.title,
-                        course: materialForm.course,
-                        subject: materialForm.subject,
-                        content: materialForm.content,
-                        type: materialForm.type,
+                        title: materialForm.title, course: materialForm.course,
+                        subject: materialForm.subject, content: materialForm.content, type: materialForm.type,
                       });
                       const materialsData = await api('materials');
                       onMaterialsUpdate(materialsData);
-                      setMaterialForm({
-                        title: '',
-                        course: '',
-                        subject: '',
-                        content: '',
-                        type: 'notes',
-                      });
+                      setMaterialForm({ title: '', course: '', subject: '', content: '', type: 'notes' });
                       alert('Material uploaded successfully!');
                     } catch (error: any) {
-                      alert(
-                        error.message ||
-                          'Failed to upload material'
-                      );
-                    } finally {
-                      setActionLoading(null);
-                    }
-                  } else {
-                    alert('Please fill all fields');
-                  }
+                      alert(error.message || 'Failed to upload material');
+                    } finally { setActionLoading(null); }
+                  } else { alert('Please fill all fields'); }
                 }}
                 className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60"
               >
-                {actionLoading === 'material'
-                  ? 'Uploading...'
-                  : 'Upload Material'}
+                {actionLoading === 'material' ? 'Uploading...' : 'Upload Material'}
               </button>
             </div>
 
-            {/* My Materials */}
             <div className="mt-8">
               <h3 className="font-bold mb-4">My Materials</h3>
               <div className="space-y-2">
                 {materials.filter(isMyMaterial).length === 0 ? (
-                  <p className="text-gray-500">
-                    No materials uploaded yet
-                  </p>
+                  <p className="text-gray-500">No materials uploaded yet</p>
                 ) : (
                   materials.filter(isMyMaterial).map(m => {
-                    const matCourse =
-                      typeof m.course === 'string'
-                        ? courses.find(c => c._id === m.course)
-                            ?.name || m.course
-                        : (m.course as any)?.name || 'Unknown';
-
+                    const matCourse = typeof m.course === 'string'
+                      ? courses.find(c => c._id === m.course)?.name || m.course
+                      : (m.course as any)?.name || 'Unknown';
                     return (
-                      <div
-                        key={m._id}
-                        className="p-4 border rounded-lg flex justify-between items-center"
-                      >
+                      <div key={m._id} className="p-4 border rounded-lg flex justify-between items-center">
                         <div>
                           <p className="font-medium">{m.title}</p>
-                          <p className="text-sm text-gray-600">
-                            {m.subject} | {m.type}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            Course: {matCourse}
-                          </p>
+                          <p className="text-sm text-gray-600">{m.subject} | {m.type}</p>
+                          <p className="text-xs text-gray-500 mt-1">Course: {matCourse}</p>
                         </div>
                         <button
                           onClick={async () => {
-                            if (!confirm('Delete this material?'))
-                              return;
+                            if (!confirm('Delete this material?')) return;
                             try {
-                              await api(
-                                `materials/${m._id}`,
-                                'DELETE'
-                              );
-                              const materialsData =
-                                await api('materials');
+                              await api(`materials/${m._id}`, 'DELETE');
+                              const materialsData = await api('materials');
                               onMaterialsUpdate(materialsData);
                             } catch (error: any) {
-                              alert(
-                                error.message ||
-                                  'Failed to delete'
-                              );
+                              alert(error.message || 'Failed to delete');
                             }
                           }}
                           className="text-red-500 hover:text-red-700"
