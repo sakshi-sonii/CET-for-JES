@@ -101,7 +101,7 @@ const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, courses }) => {
   alt="RANK UP Logo" 
   className="w-16 h-16 mx-auto mb-4 object-contain"
 />
-          <h1 className="text-3xl font-bold text-gray-900 cursive-font">J.E.S. College</h1>
+          <h1 className="text-3xl font-bold text-gray-900 cursive-font">J.E.S. College Jalna</h1>
           <p className="text-gray-600 mt-2">MHT-CET Test Preparation</p>
         </div>
 
@@ -154,14 +154,14 @@ const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, courses }) => {
           />
 
           <input
-            type="password"
-            placeholder="Password"
-            value={formData.password}
-            onChange={(e) =>
-              setFormData({ ...formData, password: e.target.value })
-            }
-            className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-          />
+  type="password"
+  placeholder={isLogin ? "Password" : "Create your password"}
+  value={formData.password}
+  onChange={(e) =>
+    setFormData({ ...formData, password: e.target.value })
+  }
+  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+/>
 
           {!isLogin && (
             <>
