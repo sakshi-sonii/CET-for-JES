@@ -32,10 +32,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ message: "Invalid test ID" });
     }
 
-    // Fetch only sections for validation — don't load full question content
     const test = await withRetry(() =>
       Test.findById(id)
-        .select("approved sections.subject sections.questions")
+        .select("approved testType stream sections.subject sections.questions")
         .lean()
     );
 
@@ -47,27 +46,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ message: "Test is already approved" });
     }
 
-    // Validate all 3 sections exist with questions
-    const requiredSubjects = ["physics", "chemistry", "maths"];
-    const testSubjects = test.sections?.map((s: any) => s.subject) || [];
-
-    for (const subj of requiredSubjects) {
-      if (!testSubjects.includes(subj)) {
-        return res.status(400).json({
-          message: `Cannot approve: missing "${subj}" section.`,
-        });
-      }
+    // Must have at least one section
+    if (!test.sections || test.sections.length === 0) {
+      return res.status(400).json({
+        message: "Cannot approve: test has no sections.",
+      });
     }
 
+    // Every section must have at least one question
     for (const section of test.sections) {
       if (!section.questions || section.questions.length === 0) {
         return res.status(400).json({
-          message: `Cannot approve: "${section.subject}" has no questions.`,
+          message: `Cannot approve: "${section.subject}" section has no questions.`,
         });
       }
     }
 
-    // Single atomic update — no need to fetch full doc, modify, and save
+    // Only mock tests require specific subject combinations
+    if (test.testType === "mock") {
+      const testSubjects = test.sections.map((s: any) => s.subject);
+      const hasPhy = testSubjects.includes("physics");
+      const hasChem = testSubjects.includes("chemistry");
+      const hasMaths = testSubjects.includes("maths");
+      const hasBio = testSubjects.includes("biology");
+
+      if (!hasPhy) {
+        return res.status(400).json({
+          message: 'Cannot approve mock test: missing "physics" section.',
+        });
+      }
+      if (!hasChem) {
+        return res.status(400).json({
+          message: 'Cannot approve mock test: missing "chemistry" section.',
+        });
+      }
+      if (!hasMaths && !hasBio) {
+        return res.status(400).json({
+          message: 'Cannot approve mock test: needs either "maths" or "biology" section.',
+        });
+      }
+    }
+
+    // Custom tests: just need at least one section with questions (already validated above)
+    // No specific subject requirements for custom tests
+
     const updated = await withRetry(() =>
       Test.findByIdAndUpdate(
         id,
