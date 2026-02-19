@@ -1890,10 +1890,10 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 </span>
               </button>
             )}
-            <span className="text-gray-600">Welcome, {user?.name}</span>
+            <span className="text-gray-600">Welcome, <b>{user?.name}</b></span>
             <button
               onClick={onLogout}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
+              className="bg-indigo-600 text-white hover:text-gray-900"
             >
               <LogOut className="w-5 h-5" />
               Logout
