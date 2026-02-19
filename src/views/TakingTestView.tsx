@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Clock, CheckCircle, Circle, AlertCircle, ChevronLeft, ChevronRight, Lock } from 'lucide-react';
+import { Clock, CheckCircle, Circle, AlertCircle, ChevronLeft, ChevronRight, Lock, Grid3X3, X } from 'lucide-react';
 import type { Test, TestSection, TestType, SubjectKey, CourseStream } from '../types';
 
-// Phases for mock tests: physics_chemistry -> transition -> maths_or_biology -> submitted
-// Phases for custom tests: custom_active -> submitted
 type TestPhase = 'physics_chemistry' | 'transition' | 'maths_or_biology' | 'custom_active' | 'submitted';
 
 interface TakingTestViewProps {
@@ -80,10 +78,8 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
   const testType: TestType = test.testType || (sections.length > 1 ? 'mock' : 'custom');
   const stream: CourseStream | undefined = test.stream;
 
-  // Determine phase 2 subject for mock tests
   const getPhase2Subject = (): SubjectKey => {
     if (stream === 'PCB') return 'biology';
-    // Check if maths section exists, otherwise fall back to biology
     const hasMaths = sections.some(s => s.subject === 'maths');
     const hasBiology = sections.some(s => s.subject === 'biology');
     if (hasMaths) return 'maths';
@@ -94,34 +90,29 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
   const phase2Subject = getPhase2Subject();
   const phase2Label = getSubjectLabel(phase2Subject);
 
-  // Determine initial phase
   const getInitialPhase = (): TestPhase => {
     if (testType === 'custom') return 'custom_active';
     return 'physics_chemistry';
   };
 
-  // Determine initial subject
   const getInitialSubject = (): string => {
     if (testType === 'custom') return sections[0]?.subject || 'physics';
     return 'physics';
   };
 
-  // answers keyed by "{subject}_{questionIndex}" e.g. "physics_0", "maths_3"
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [markedForReview, setMarkedForReview] = useState<Set<string>>(new Set());
   const [currentPhase, setCurrentPhase] = useState<TestPhase>(getInitialPhase());
   const [activeSubject, setActiveSubject] = useState<string>(getInitialSubject());
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
+  const [showMobilePalette, setShowMobilePalette] = useState(false);
 
-  // Timers in seconds
-  // Mock test timers
   const [phaseOneTimeLeft, setPhaseOneTimeLeft] = useState<number>(
     testType === 'mock' ? (test.sectionTimings?.physicsChemistry ?? 90) * 60 : 0
   );
   const [phaseTwoTimeLeft, setPhaseTwoTimeLeft] = useState<number>(
     testType === 'mock' ? (test.sectionTimings?.mathsOrBiology ?? 90) * 60 : 0
   );
-  // Custom test timer
   const [customTimeLeft, setCustomTimeLeft] = useState<number>(
     testType === 'custom' ? (test.customDuration ?? 60) * 60 : 0
   );
@@ -129,7 +120,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const submittedRef = useRef(false);
 
-  // Get the currently active section
   const getActiveSection = (): TestSection | undefined => {
     return sections.find(s => s.subject === activeSubject);
   };
@@ -137,75 +127,46 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
   const activeSection = getActiveSection();
   const activeQuestions = activeSection?.questions || [];
 
-  // ========================
-  // SUBJECT ACCESS LOGIC
-  // ========================
-
-  // Get all subjects that exist in sections
   const allSubjects = sections.map(s => s.subject);
-
-  // Phase 1 subjects (mock only)
   const phase1Subjects: SubjectKey[] = ['physics', 'chemistry'];
 
-  // Get subjects accessible in current phase
   const getAccessibleSubjects = (): string[] => {
-    if (testType === 'custom') {
-      return allSubjects;
-    }
-
-    // Mock test
+    if (testType === 'custom') return allSubjects;
     if (currentPhase === 'physics_chemistry') {
       return allSubjects.filter(s => phase1Subjects.includes(s as SubjectKey));
     }
-    if (currentPhase === 'maths_or_biology') {
-      // Show all but phase 1 subjects are read-only
-      return allSubjects;
-    }
+    if (currentPhase === 'maths_or_biology') return allSubjects;
     return allSubjects;
   };
 
   const accessibleSubjects = getAccessibleSubjects();
 
-  // Check if a subject is completely locked (cannot even view)
   const isSubjectLocked = (subject: string): boolean => {
     if (testType === 'custom') return false;
-
-    // In phase 1, phase 2 subject is locked
     if (currentPhase === 'physics_chemistry') {
       return !phase1Subjects.includes(subject as SubjectKey);
     }
     return false;
   };
 
-  // Check if a subject is read-only (can view but not change answers)
   const isSubjectReadOnly = (subject: string): boolean => {
     if (testType === 'custom') return false;
-
-    // In phase 2, phase 1 subjects are read-only
     if (currentPhase === 'maths_or_biology' && phase1Subjects.includes(subject as SubjectKey)) {
       return true;
     }
     return false;
   };
 
-  // Check if a subject can be navigated to
   const canNavigateTo = (subject: string): boolean => {
     if (currentPhase === 'submitted' || currentPhase === 'transition') return false;
     if (testType === 'custom') return true;
-
     if (currentPhase === 'physics_chemistry') {
       return phase1Subjects.includes(subject as SubjectKey);
     }
-    if (currentPhase === 'maths_or_biology') {
-      // Can view all, but only interact with phase 2 subject
-      return true;
-    }
+    if (currentPhase === 'maths_or_biology') return true;
     return false;
   };
 
-  // ========================
-  // TIMER
-  // ========================
   const handleSubmit = useCallback(() => {
     if (submittedRef.current) return;
     submittedRef.current = true;
@@ -232,9 +193,7 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
           setPhaseTwoTimeLeft(prev => {
             if (prev <= 1) {
               clearInterval(timer);
-              if (!submittedRef.current) {
-                handleSubmit();
-              }
+              if (!submittedRef.current) handleSubmit();
               return 0;
             }
             return prev - 1;
@@ -245,9 +204,7 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
           setCustomTimeLeft(prev => {
             if (prev <= 1) {
               clearInterval(timer);
-              if (!submittedRef.current) {
-                handleSubmit();
-              }
+              if (!submittedRef.current) handleSubmit();
               return 0;
             }
             return prev - 1;
@@ -259,9 +216,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     return () => clearInterval(timer);
   }, [currentPhase, testType, handleSubmit]);
 
-  // ========================
-  // HANDLERS
-  // ========================
   const formatTime = (seconds: number): string => {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
@@ -294,11 +248,8 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     const key = answerKey(activeSubject, currentQuestionIndex);
     setMarkedForReview(prev => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -307,13 +258,13 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     if (!canNavigateTo(subject)) return;
     setActiveSubject(subject);
     setCurrentQuestionIndex(qIdx);
+    setShowMobilePalette(false);
   };
 
   const goNext = () => {
     if (currentQuestionIndex < activeQuestions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
     } else {
-      // Move to next accessible subject that isn't locked
       const navigableSubjects = accessibleSubjects.filter(s => canNavigateTo(s) && !isSubjectLocked(s));
       const currentSubjectIdx = navigableSubjects.indexOf(activeSubject);
       if (currentSubjectIdx < navigableSubjects.length - 1) {
@@ -339,7 +290,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     }
   };
 
-  // Mock test: early submit phase 1 and move to phase 2
   const submitPhase1Early = () => {
     const phase1Answered = phase1Subjects.reduce((sum, sub) => {
       const section = sections.find(s => s.subject === sub);
@@ -371,7 +321,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     setPhaseOneTimeLeft(0);
   };
 
-  // Start phase 2 (maths or biology)
   const startPhase2 = () => {
     setCurrentPhase('maths_or_biology');
     setActiveSubject(phase2Subject);
@@ -380,34 +329,22 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
 
   const handleSubmitConfirm = () => {
     if (testType === 'mock' && currentPhase === 'physics_chemistry') {
-      // In mock phase 1, submit button should submit phase 1 early
       submitPhase1Early();
       return;
     }
 
-    const relevantSections = testType === 'mock' && currentPhase === 'maths_or_biology'
-      ? sections // All sections (phase 1 already locked)
-      : sections;
-
-    const totalQ = relevantSections.reduce((sum, s) => sum + (s.questions?.length || 0), 0);
+    const totalQ = sections.reduce((sum, s) => sum + (s.questions?.length || 0), 0);
     const answeredQ = Object.keys(answers).length;
     const unanswered = totalQ - answeredQ;
 
     if (unanswered > 0) {
-      if (!confirm(`You have ${unanswered} unanswered question(s). Are you sure you want to submit?`)) {
-        return;
-      }
+      if (!confirm(`You have ${unanswered} unanswered question(s). Are you sure you want to submit?`)) return;
     } else {
-      if (!confirm('Are you sure you want to submit the test?')) {
-        return;
-      }
+      if (!confirm('Are you sure you want to submit the test?')) return;
     }
     handleSubmit();
   };
 
-  // ========================
-  // STATS
-  // ========================
   const getQuestionStatus = (subject: string, qIdx: number): 'answered' | 'review' | 'unanswered' => {
     const key = answerKey(subject, qIdx);
     if (markedForReview.has(key)) return 'review';
@@ -438,7 +375,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
   const currentKey = answerKey(activeSubject, currentQuestionIndex);
   const isCurrentReadOnly = isSubjectReadOnly(activeSubject) || isSubjectLocked(activeSubject);
 
-  // Current timer
   const getCurrentTimeLeft = (): number => {
     if (testType === 'custom') return customTimeLeft;
     if (currentPhase === 'physics_chemistry') return phaseOneTimeLeft;
@@ -447,9 +383,8 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
   };
 
   const currentTimeLeft = getCurrentTimeLeft();
-  const isTimeWarning = currentTimeLeft < 300; // Less than 5 minutes
+  const isTimeWarning = currentTimeLeft < 300;
 
-  // Timer label
   const getTimerLabel = (): string => {
     if (testType === 'custom') return 'Time Left';
     if (currentPhase === 'physics_chemistry') return 'Phy + Chem';
@@ -457,18 +392,12 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     return 'Time';
   };
 
-  // Phase description
   const getPhaseDescription = (): string => {
     if (testType === 'custom') {
-      const subjectNames = sections.map(s => getSubjectLabel(s.subject)).join(', ');
-      return subjectNames;
+      return sections.map(s => getSubjectLabel(s.subject)).join(', ');
     }
-    if (currentPhase === 'physics_chemistry') {
-      return 'Part 1: Physics + Chemistry';
-    }
-    if (currentPhase === 'maths_or_biology') {
-      return `Part 2: ${phase2Label} (Physics & Chemistry locked)`;
-    }
+    if (currentPhase === 'physics_chemistry') return 'Part 1: Physics + Chemistry';
+    if (currentPhase === 'maths_or_biology') return `Part 2: ${phase2Label} (Physics & Chemistry locked)`;
     return '';
   };
 
@@ -489,7 +418,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     }
   };
 
-  // Determine submit button text based on phase
   const getSubmitButtonText = (): string => {
     if (submitting) return 'Submitting...';
     if (testType === 'mock' && currentPhase === 'physics_chemistry') {
@@ -498,7 +426,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     return 'Submit Test';
   };
 
-  // Check if we're on the last question of the last navigable subject
   const isLastQuestion = (): boolean => {
     const navigableSubjects = accessibleSubjects.filter(s => canNavigateTo(s) && !isSubjectLocked(s));
     const isLastSubject = navigableSubjects.indexOf(activeSubject) === navigableSubjects.length - 1;
@@ -506,8 +433,71 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
     return isLastSubject && isLastQ;
   };
 
+  const isFirstQuestion = (): boolean => {
+    const navigable = accessibleSubjects.filter(s => canNavigateTo(s) && !isSubjectLocked(s));
+    return navigable.indexOf(activeSubject) === 0 && currentQuestionIndex === 0;
+  };
+
   // ========================
-  // TRANSITION SCREEN (Mock tests only)
+  // QUESTION PALETTE RENDERER (shared between desktop sidebar and mobile modal)
+  // ========================
+  const renderQuestionPalette = () => (
+    <>
+      {sections.map(section => {
+        const locked = isSubjectLocked(section.subject);
+        const readOnly = isSubjectReadOnly(section.subject);
+        const stats = getSectionStats(section.subject);
+        const isActiveSec = activeSubject === section.subject;
+        const questions = section.questions || [];
+        const colors = getSubjectColor(section.subject);
+
+        const headerBg = locked
+          ? 'bg-gray-100 text-gray-400'
+          : isActiveSec
+          ? colors.header
+          : 'bg-gray-50 text-gray-600';
+
+        return (
+          <div key={section.subject} className="mb-5">
+            <div className={`font-bold text-sm mb-2 px-3 py-2 rounded flex items-center gap-2 ${headerBg}`}>
+              <span className="flex-1">
+                {getSubjectLabel(section.subject)}
+                {locked && <Lock className="w-3 h-3 inline ml-1" />}
+                {readOnly && <span className="text-xs font-normal ml-1">(locked)</span>}
+              </span>
+              <span className="font-normal text-xs">
+                {stats.answered}/{stats.total}
+              </span>
+            </div>
+            <div className="grid grid-cols-5 gap-2">
+              {questions.map((_, qIdx) => {
+                const status = getQuestionStatus(section.subject, qIdx);
+                const isCurrent = activeSubject === section.subject && currentQuestionIndex === qIdx;
+
+                return (
+                  <button
+                    key={qIdx}
+                    onClick={() => goToQuestion(section.subject, qIdx)}
+                    disabled={locked}
+                    className={`w-10 h-10 rounded font-bold text-sm transition-all ${
+                      locked
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : getStatusButtonColor(status, isCurrent)
+                    }`}
+                  >
+                    {qIdx + 1}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+
+  // ========================
+  // TRANSITION SCREEN
   // ========================
   if (currentPhase === 'transition') {
     const phaseOneTotalTime = (test.sectionTimings?.physicsChemistry ?? 90);
@@ -538,7 +528,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
               You cannot go back to modify them.
             </p>
 
-            {/* Summary of Phase 1 */}
             <div className="grid grid-cols-2 gap-3 mb-6">
               {phase1Subjects.map(subject => {
                 const section = sections.find(s => s.subject === subject);
@@ -578,7 +567,7 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
   }
 
   // ========================
-  // SUBMITTED SCREEN (shouldn't normally show, parent handles)
+  // SUBMITTED SCREEN
   // ========================
   if (currentPhase === 'submitted') {
     return (
@@ -604,12 +593,9 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
           <div className="px-4 py-3 flex justify-between items-center">
             <div className="min-w-0 flex-1">
               <h2 className="text-lg font-bold truncate">{test.title}</h2>
-              <p className="text-sm text-gray-600">
-                {getPhaseDescription()}
-              </p>
+              <p className="text-sm text-gray-600">{getPhaseDescription()}</p>
             </div>
             <div className="flex items-center gap-3 shrink-0 ml-4">
-              {/* Phase timer */}
               <div
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold ${
                   isTimeWarning
@@ -630,7 +616,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
                 </div>
               </div>
 
-              {/* Mock test: show phase 2 remaining time indicator */}
               {testType === 'mock' && currentPhase === 'physics_chemistry' && (
                 <div className="hidden md:flex items-center gap-1 px-3 py-2 bg-gray-100 rounded-lg text-xs text-gray-500">
                   <Lock className="w-3 h-3" />
@@ -662,17 +647,12 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
                     }
                   }}
                   disabled={locked}
-                  className={`px-4 py-2 rounded-lg transition-all whitespace-nowrap ${getSectionTabColor(
-                    section.subject,
-                    isActive
-                  )}`}
+                  className={`px-4 py-2 rounded-lg transition-all whitespace-nowrap ${getSectionTabColor(section.subject, isActive)}`}
                 >
                   <div className="font-bold text-sm flex items-center gap-1">
                     {getSubjectLabel(section.subject)}
                     {locked && <Lock className="w-3 h-3" />}
-                    {readOnly && (
-                      <span className="text-xs font-normal opacity-75">(locked)</span>
-                    )}
+                    {readOnly && <span className="text-xs font-normal opacity-75">(locked)</span>}
                   </div>
                   <div className="text-xs">
                     {stats.answered}/{stats.total} answered • {marksPerQ}m/Q
@@ -681,7 +661,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
               );
             })}
 
-            {/* Early submit button for mock phase 1 */}
             {testType === 'mock' && currentPhase === 'physics_chemistry' && (
               <button
                 onClick={submitPhase1Early}
@@ -710,8 +689,8 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
           </div>
         </nav>
 
-        {/* Question area */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6">
+        {/* Question area — add bottom padding for mobile fixed bar */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-24 lg:pb-6">
           <div className="max-w-4xl mx-auto">
             {/* Read-only banner */}
             {isSubjectReadOnly(activeSubject) && (
@@ -742,9 +721,7 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
                       Question {currentQuestionIndex + 1} of {activeQuestions.length}
                       <span className="ml-2 text-sm font-normal">
                         <span
-                          className={`px-2 py-1 rounded text-xs font-medium ${
-                            getSubjectColor(activeSubject).badge
-                          }`}
+                          className={`px-2 py-1 rounded text-xs font-medium ${getSubjectColor(activeSubject).badge}`}
                         >
                           {getSubjectLabel(activeSubject)} •{' '}
                           {getMarksPerQuestion(activeSubject, activeSection)} mark
@@ -768,9 +745,7 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
                   </div>
 
                   <div className="prose max-w-none">
-                    <p className="text-lg text-gray-900 leading-relaxed">
-                      {currentQuestion.question}
-                    </p>
+                    <p className="text-lg text-gray-900 leading-relaxed">{currentQuestion.question}</p>
                     {currentQuestion.questionImage && (
                       <img
                         src={currentQuestion.questionImage}
@@ -821,8 +796,8 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
                   ))}
                 </div>
 
-                {/* Bottom controls */}
-                <div className="mt-8 flex flex-col sm:flex-row justify-between items-center pt-6 border-t gap-4">
+                {/* Desktop-only bottom controls (hidden on mobile since we have the fixed bar) */}
+                <div className="mt-8 flex-col sm:flex-row justify-between items-center pt-6 border-t gap-4 hidden lg:flex">
                   <button
                     onClick={clearAnswer}
                     disabled={isCurrentReadOnly || answers[currentKey] === undefined}
@@ -834,20 +809,13 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
                   <div className="flex gap-3">
                     <button
                       onClick={goPrevious}
-                      disabled={
-                        currentQuestionIndex === 0 &&
-                        (() => {
-                          const navigable = accessibleSubjects.filter(s => canNavigateTo(s) && !isSubjectLocked(s));
-                          return navigable.indexOf(activeSubject) === 0;
-                        })()
-                      }
+                      disabled={isFirstQuestion()}
                       className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <ChevronLeft className="w-4 h-4" />
                       Previous
                     </button>
 
-                    {/* Next or Submit */}
                     {!isLastQuestion() ? (
                       <button
                         onClick={goNext}
@@ -874,7 +842,6 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
               </div>
             )}
 
-            {/* No question selected fallback */}
             {!currentQuestion && !isSubjectLocked(activeSubject) && (
               <div className="bg-white rounded-lg shadow-lg p-8 text-center">
                 <p className="text-gray-500">No questions available in this section.</p>
@@ -884,94 +851,33 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
         </div>
       </div>
 
-      {/* Right sidebar — Question Palette */}
+      {/* Desktop sidebar — Question Palette (hidden on mobile) */}
       <div className="w-72 md:w-80 bg-white border-l shadow-lg overflow-y-auto hidden lg:block">
         <div className="sticky top-0 bg-white border-b p-4 z-10">
           <h3 className="font-bold text-gray-800 mb-3">Question Palette</h3>
-
           <div className="space-y-2 text-xs">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-green-500 text-white rounded flex items-center justify-center font-bold text-xs">
-                ✓
-              </div>
+              <div className="w-7 h-7 bg-green-500 text-white rounded flex items-center justify-center font-bold text-xs">✓</div>
               <span>Answered</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-red-500 text-white rounded flex items-center justify-center font-bold text-xs">
-                ?
-              </div>
+              <div className="w-7 h-7 bg-red-500 text-white rounded flex items-center justify-center font-bold text-xs">?</div>
               <span>Not Answered</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-yellow-500 text-white rounded flex items-center justify-center font-bold text-xs">
-                !
-              </div>
+              <div className="w-7 h-7 bg-yellow-500 text-white rounded flex items-center justify-center font-bold text-xs">!</div>
               <span>Marked for Review</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-indigo-500 text-white rounded flex items-center justify-center font-bold text-xs ring-2 ring-indigo-300">
-                ●
-              </div>
+              <div className="w-7 h-7 bg-indigo-500 text-white rounded flex items-center justify-center font-bold text-xs ring-2 ring-indigo-300">●</div>
               <span>Current</span>
             </div>
           </div>
         </div>
 
         <div className="p-4">
-          {sections.map(section => {
-            const locked = isSubjectLocked(section.subject);
-            const readOnly = isSubjectReadOnly(section.subject);
-            const stats = getSectionStats(section.subject);
-            const isActiveSec = activeSubject === section.subject;
-            const questions = section.questions || [];
-            const colors = getSubjectColor(section.subject);
+          {renderQuestionPalette()}
 
-            const headerBg = locked
-              ? 'bg-gray-100 text-gray-400'
-              : isActiveSec
-              ? colors.header
-              : 'bg-gray-50 text-gray-600';
-
-            return (
-              <div key={section.subject} className="mb-5">
-                <div className={`font-bold text-sm mb-2 px-3 py-2 rounded flex items-center gap-2 ${headerBg}`}>
-                  <span className="flex-1">
-                    {getSubjectLabel(section.subject)}
-                    {locked && <Lock className="w-3 h-3 inline ml-1" />}
-                    {readOnly && <span className="text-xs font-normal ml-1">(locked)</span>}
-                  </span>
-                  <span className="font-normal text-xs">
-                    {stats.answered}/{stats.total}
-                  </span>
-                </div>
-                <div className="grid grid-cols-5 gap-2">
-                  {questions.map((_, qIdx) => {
-                    const status = getQuestionStatus(section.subject, qIdx);
-                    const isCurrent =
-                      activeSubject === section.subject &&
-                      currentQuestionIndex === qIdx;
-
-                    return (
-                      <button
-                        key={qIdx}
-                        onClick={() => goToQuestion(section.subject, qIdx)}
-                        disabled={locked}
-                        className={`w-10 h-10 rounded font-bold text-sm transition-all ${
-                          locked
-                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                            : getStatusButtonColor(status, isCurrent)
-                        }`}
-                      >
-                        {qIdx + 1}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Submit / Phase transition button in sidebar */}
           {testType === 'mock' && currentPhase === 'physics_chemistry' && (
             <button
               onClick={submitPhase1Early}
@@ -1005,50 +911,164 @@ const TakingTestView: React.FC<TakingTestViewProps> = ({
         </div>
       </div>
 
-      {/* Mobile bottom bar (visible only on small screens) */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg p-3 flex gap-2 lg:hidden z-50">
-        <button
-          onClick={goPrevious}
-          disabled={
-            currentQuestionIndex === 0 &&
-            (() => {
-              const navigable = accessibleSubjects.filter(s => canNavigateTo(s) && !isSubjectLocked(s));
-              return navigable.indexOf(activeSubject) === 0;
-            })()
-          }
-          className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-gray-600 text-white rounded text-sm disabled:opacity-40"
-        >
-          <ChevronLeft className="w-4 h-4" />
-          Prev
-        </button>
+      {/* ======================== */}
+      {/* MOBILE BOTTOM BAR (lg:hidden) */}
+      {/* ======================== */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg lg:hidden z-50">
+        {/* Clear response + Mark for review row */}
+        <div className="flex items-center justify-between px-3 py-2 border-b bg-gray-50 text-xs">
+          <button
+            onClick={clearAnswer}
+            disabled={isCurrentReadOnly || answers[currentKey] === undefined}
+            className="px-3 py-1.5 text-gray-600 bg-white border rounded hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-xs"
+          >
+            Clear Response
+          </button>
 
-        {testType === 'mock' && currentPhase === 'physics_chemistry' && (
-          <button
-            onClick={submitPhase1Early}
-            className="flex-1 px-3 py-2 bg-amber-600 text-white rounded text-sm font-medium"
-          >
-            Submit P+C →
-          </button>
-        )}
+          <div className="flex items-center gap-2">
+            {!isCurrentReadOnly && (
+              <button
+                onClick={toggleMarkReview}
+                className={`flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium ${
+                  markedForReview.has(currentKey)
+                    ? 'bg-yellow-100 text-yellow-800 border border-yellow-300'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <AlertCircle className="w-3 h-3" />
+                {markedForReview.has(currentKey) ? 'Marked' : 'Review'}
+              </button>
+            )}
 
-        {!isLastQuestion() ? (
+            {/* Question palette toggle */}
+            <button
+              onClick={() => setShowMobilePalette(true)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium hover:bg-indigo-200"
+            >
+              <Grid3X3 className="w-3.5 h-3.5" />
+              Q. Palette
+            </button>
+          </div>
+        </div>
+
+        {/* Navigation row */}
+        <div className="p-3 flex gap-2">
           <button
-            onClick={goNext}
-            className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-indigo-600 text-white rounded text-sm"
+            onClick={goPrevious}
+            disabled={isFirstQuestion()}
+            className="flex-1 flex items-center justify-center gap-1 px-3 py-2.5 bg-gray-600 text-white rounded text-sm font-medium disabled:opacity-40"
           >
-            Next
-            <ChevronRight className="w-4 h-4" />
+            <ChevronLeft className="w-4 h-4" />
+            Prev
           </button>
-        ) : (
-          <button
-            onClick={handleSubmitConfirm}
-            disabled={submitting}
-            className="flex-1 px-3 py-2 bg-green-600 text-white rounded text-sm font-medium disabled:opacity-50"
-          >
-            {submitting ? '...' : 'Submit'}
-          </button>
-        )}
+
+          {testType === 'mock' && currentPhase === 'physics_chemistry' && (
+            <button
+              onClick={submitPhase1Early}
+              className="flex-1 px-3 py-2.5 bg-amber-600 text-white rounded text-sm font-medium"
+            >
+              Submit P+C →
+            </button>
+          )}
+
+          {!isLastQuestion() ? (
+            <button
+              onClick={goNext}
+              className="flex-1 flex items-center justify-center gap-1 px-3 py-2.5 bg-indigo-600 text-white rounded text-sm font-medium"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmitConfirm}
+              disabled={submitting}
+              className={`flex-1 px-3 py-2.5 text-white rounded text-sm font-medium disabled:opacity-50 ${
+                testType === 'mock' && currentPhase === 'physics_chemistry'
+                  ? 'bg-amber-600'
+                  : 'bg-green-600'
+              }`}
+            >
+              {submitting ? '...' : 'Submit'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* ======================== */}
+      {/* MOBILE QUESTION PALETTE MODAL */}
+      {/* ======================== */}
+      {showMobilePalette && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-[60] lg:hidden flex items-end">
+          <div className="bg-white w-full max-h-[75vh] rounded-t-2xl overflow-hidden flex flex-col animate-slide-up">
+            {/* Modal header */}
+            <div className="sticky top-0 bg-white border-b px-4 py-3 flex justify-between items-center shrink-0">
+              <div>
+                <h3 className="font-bold text-gray-800">Question Palette</h3>
+                <p className="text-xs text-gray-500">
+                  {totalAnswered}/{totalQuestions} answered
+                </p>
+              </div>
+              <button
+                onClick={() => setShowMobilePalette(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Legend */}
+            <div className="px-4 py-2 bg-gray-50 border-b flex flex-wrap gap-3 text-xs shrink-0">
+              <div className="flex items-center gap-1">
+                <div className="w-5 h-5 bg-green-500 rounded text-white flex items-center justify-center text-[10px] font-bold">✓</div>
+                <span>Answered</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-5 h-5 bg-red-500 rounded text-white flex items-center justify-center text-[10px] font-bold">?</div>
+                <span>Not Answered</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-5 h-5 bg-yellow-500 rounded text-white flex items-center justify-center text-[10px] font-bold">!</div>
+                <span>Review</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-5 h-5 bg-indigo-500 rounded text-white flex items-center justify-center text-[10px] font-bold ring-1 ring-indigo-300">●</div>
+                <span>Current</span>
+              </div>
+            </div>
+
+            {/* Scrollable palette */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {renderQuestionPalette()}
+            </div>
+
+            {/* Submit buttons */}
+            <div className="sticky bottom-0 bg-white border-t p-3 shrink-0">
+              {testType === 'mock' && currentPhase === 'physics_chemistry' && (
+                <button
+                  onClick={() => { setShowMobilePalette(false); submitPhase1Early(); }}
+                  className="w-full mb-2 px-4 py-2.5 bg-amber-600 text-white rounded-lg font-bold text-sm"
+                >
+                  Submit Phy + Chem → {phase2Label}
+                </button>
+              )}
+              <button
+                onClick={() => { setShowMobilePalette(false); handleSubmitConfirm(); }}
+                disabled={submitting}
+                className={`w-full px-4 py-2.5 text-white rounded-lg font-bold text-sm disabled:opacity-50 ${
+                  testType === 'mock' && currentPhase === 'physics_chemistry'
+                    ? 'bg-gray-400'
+                    : 'bg-green-600 hover:bg-green-700'
+                }`}
+              >
+                {testType === 'mock' && currentPhase === 'physics_chemistry'
+                  ? 'Submit Entire Test'
+                  : submitting ? 'Submitting...' : 'Submit Test'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
