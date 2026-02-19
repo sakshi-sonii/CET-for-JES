@@ -362,14 +362,14 @@ const AdminView: React.FC<AdminViewProps> = ({
             <span className="text-xl font-bold">Admin Panel</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-gray-600">Welcome, {user?.name}</span>
-            <button
-              onClick={onLogout}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
-            >
-              <LogOut className="w-5 h-5" />
-              Logout
-            </button>
+            <span className="text-gray-600">Welcome, <b>{user?.name}</b></span>
+                        <button
+                                      onClick={onLogout}
+                                      className="px-6 py-2 rounded-lg font-medium whitespace-nowrap transition"
+                                    >
+                                      <LogOut className="bg-indigo-600 text-white" />
+                                      Logout
+                                    </button>
           </div>
         </div>
       </nav>
