@@ -264,7 +264,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
           questions: currentSectionQuestions,
         });
       }
-    }
+    } 
 
     // Add final chunk if it has content
     if (currentChunk.length > 0) {
