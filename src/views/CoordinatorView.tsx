@@ -101,16 +101,12 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     setLoading(true);
     setError('');
     try {
-      // Fetch teacher questions (question banks) from coordinator endpoint
-      const courseTests = (await api(`subjects?action=questions&courseId=${encodeURIComponent(courseId)}`, 'GET')) || [];
+      // Fetch all tests and filter for teacher-submitted tests in this course
+      const allTests = (await api('tests', 'GET')) || [];
 
-      // Filter for tests that are either pending review, resubmitted, or accepted by coordinator
-      const availableTests = courseTests.filter((test: any) => {
-        return test.teacherId && (
-          test.reviewStatus === 'submitted_to_coordinator' ||
-          test.reviewStatus === 'changes_requested' ||
-          test.reviewStatus === 'accepted_by_coordinator'
-        );
+      // Filter for tests that have a teacherId and match the selected course
+      const availableTests = allTests.filter((test: any) => {
+        return test.teacherId && test.course === courseId;
       });
 
       // Organize by teacher and subject

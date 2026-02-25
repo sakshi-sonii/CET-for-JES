@@ -2024,21 +2024,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-xl font-bold">{t.title}</h3>
-                        {t.testType === 'mock' && (
-                          <span className="px-2 py-0.5 bg-violet-100 text-violet-700 rounded text-xs font-medium">
-                            Mock Test {t.stream && `(${t.stream})`}
-                          </span>
-                        )}
-                        {t.testType === 'custom' && (
-                          <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
-                            Custom Test
-                          </span>
-                        )}
-                        {!t.testType && t.sections && t.sections.length === 1 && (
-                          <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
-                            Subject Test
-                          </span>
-                        )}
                       </div>
 
                       {/* Section badges */}
@@ -2066,7 +2051,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       </p>
 
                       {/* Timing info */}
-                      {(t.testType === 'mock' || t.testType === 'custom') && (
+                      {formatTestTiming(t) && (
                         <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
                           <Clock className="w-3 h-3" />
                           {formatTestTiming(t)}
