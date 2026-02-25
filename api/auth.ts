@@ -19,8 +19,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Route: GET /api/auth/me
-  if (req.method === "GET" && req.url?.includes("/me")) {
+  // Route: GET /api/auth?action=me (also supports legacy /api/auth/me)
+  const authAction = typeof req.query.action === "string" ? req.query.action : null;
+  if (req.method === "GET" && (authAction === "me" || req.url?.includes("/me"))) {
     try {
       await connectDB();
       const user = await getUserFromRequest(req);

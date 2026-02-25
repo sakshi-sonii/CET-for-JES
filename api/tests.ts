@@ -21,10 +21,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    // Extract ID and action from URL (e.g., /api/tests/123 or /api/tests/123/approve)
-    const urlParts = req.url?.split('/').filter(Boolean) || [];
-    const testId = urlParts.length > 2 ? urlParts[2] : null;
-    const action = urlParts.length > 3 ? urlParts[3] : null;
+    // Support both consolidated query routing (/api/tests?testId=...)
+    // and legacy path routing (/api/tests/:id[/approve]).
+    const requestUrl = new URL(req.url || "/api/tests", "http://localhost");
+    const pathParts = requestUrl.pathname.split("/").filter(Boolean);
+    const pathTestId = pathParts.length > 2 ? pathParts[2] : null;
+    const pathAction = pathParts.length > 3 ? pathParts[3] : null;
+    const queryTestId = typeof req.query.testId === "string" ? req.query.testId : null;
+    const queryAction = typeof req.query.action === "string" ? req.query.action : null;
+    const testId = queryTestId || pathTestId;
+    const action = queryAction || pathAction;
 
     // ========================
     // GET /api/tests or /api/tests/:id

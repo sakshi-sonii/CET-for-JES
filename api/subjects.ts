@@ -14,12 +14,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     await connectDB();
 
-    // Extract path params from URLs like /api/subjects/:id or /api/subjects/questions
-    const urlParts = req.url?.split('/').filter(Boolean) || [];
-    const pathParam = urlParts.length > 2 ? urlParts[2] : null;
-
-    // Check for /questions endpoint
-    const isQuestionsPath = req.url?.includes("/questions");
+    // Support both consolidated query routing (/api/subjects?action=questions)
+    // and legacy path routing (/api/subjects/questions, /api/subjects/:id).
+    const requestUrl = new URL(req.url || "/api/subjects", "http://localhost");
+    const pathParts = requestUrl.pathname.split("/").filter(Boolean);
+    const pathParam = pathParts.length > 2 ? pathParts[2] : null;
+    const queryAction = typeof req.query.action === "string" ? req.query.action : null;
+    const isQuestionsPath = pathParam === "questions" || queryAction === "questions";
 
     // ========================
     // GET /api/subjects/questions or /api/subjects?courseId=xxx

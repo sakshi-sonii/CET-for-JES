@@ -195,7 +195,7 @@ const AdminView: React.FC<AdminViewProps> = ({
     if (!id) return
     setActionLoading(id)
     try {
-      await api(`users/${id}/approve`, 'PATCH')
+      await api(`users?userId=${encodeURIComponent(id)}&action=approve`, 'PATCH')
       const usersData = await api('users')
       onUsersUpdate(usersData)
     } catch (error: any) {
@@ -208,7 +208,7 @@ const AdminView: React.FC<AdminViewProps> = ({
     if (!id) return
     setActionLoading(id)
     try {
-      await api(`users/${id}`, 'DELETE')
+      await api(`users?userId=${encodeURIComponent(id)}`, 'DELETE')
       const usersData = await api('users')
       onUsersUpdate(usersData)
     } catch (error: any) {
@@ -221,7 +221,7 @@ const AdminView: React.FC<AdminViewProps> = ({
     if (!id) return
     setActionLoading(id)
     try {
-      await api(`tests/${id}/approve`, 'PATCH')
+      await api(`tests?testId=${encodeURIComponent(id)}&action=approve`, 'PATCH')
       const testsData = await api('tests')
       onTestsUpdate(testsData)
     } catch (error: any) {
@@ -234,7 +234,7 @@ const AdminView: React.FC<AdminViewProps> = ({
     if (!id) return
     setActionLoading(id)
     try {
-      await api(`tests/${id}`, 'DELETE')
+      await api(`tests?testId=${encodeURIComponent(id)}`, 'DELETE')
       const testsData = await api('tests')
       onTestsUpdate(testsData)
     } catch (error: any) {
@@ -246,7 +246,7 @@ const AdminView: React.FC<AdminViewProps> = ({
   const handleToggleAnswerKey = async (testId: string, currentShowAnswerKey: boolean) => {
     setActionLoading(`answerkey-${testId}`)
     try {
-      await api(`tests/${testId}`, 'PATCH', { showAnswerKey: !currentShowAnswerKey })
+      await api(`tests?testId=${encodeURIComponent(testId)}`, 'PATCH', { showAnswerKey: !currentShowAnswerKey })
       const testsData = await api('tests')
       onTestsUpdate(testsData)
     } catch (error: any) {
@@ -305,7 +305,7 @@ const AdminView: React.FC<AdminViewProps> = ({
     if (!confirm('Delete this subject?')) return
     try {
       setActionLoading(`delete-${subjectId}`)
-      await api(`subjects/${subjectId}`, 'DELETE')
+      await api(`subjects?subjectId=${encodeURIComponent(subjectId)}`, 'DELETE')
       const subjectsData = await api('subjects')
       setSubjects(subjectsData || [])
     } catch (error: any) {
@@ -431,13 +431,12 @@ const AdminView: React.FC<AdminViewProps> = ({
           </div>
           <div className="flex items-center gap-4">
             <span className="text-gray-600">Welcome, <b>{user?.name}</b></span>
-                        <button
-                                      onClick={onLogout}
-                                      className="px-6 py-2 rounded-lg font-medium whitespace-nowrap transition"
-                                    >
-                                      <LogOut className="bg-indigo-600 text-white" />
-                                      Logout
-                                    </button>
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+            >
+              <LogOut size={20} /> Logout
+            </button>
           </div>
         </div>
       </nav>
@@ -562,7 +561,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                       <button disabled={actionLoading === u._id} onClick={async () => {
                         if (!confirm('Delete user?')) return
                         setActionLoading(u._id)
-                        try { await api(`users/${u._id}`, 'DELETE'); const usersData = await api('users'); onUsersUpdate(usersData) } catch (error: any) { alert(error.message || 'Failed') }
+                        try { await api(`users?userId=${encodeURIComponent(u._id)}`, 'DELETE'); const usersData = await api('users'); onUsersUpdate(usersData) } catch (error: any) { alert(error.message || 'Failed') }
                         setActionLoading(null)
                       }} className="px-3 py-1 bg-red-600 text-white rounded">Delete</button>
                     </div>

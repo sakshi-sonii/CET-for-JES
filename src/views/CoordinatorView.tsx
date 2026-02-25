@@ -88,7 +88,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     setError('');
     try {
       // Fetch teacher questions (question banks) from coordinator endpoint
-      const courseTests = (await api(`subjects/questions?courseId=${courseId}`, 'GET')) || [];
+      const courseTests = (await api(`subjects?action=questions&courseId=${encodeURIComponent(courseId)}`, 'GET')) || [];
 
       // Organize by teacher and subject
       const bankMap = new Map<string, TeacherQuestionsBank>();

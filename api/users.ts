@@ -14,13 +14,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     await connectDB();
 
-    // Extract user ID and action from URL (e.g., /api/users/123 or /api/users/123/approve)
-    const urlParts = req.url?.split('/').filter(Boolean) || [];
-    const userId = urlParts.length > 2 ? urlParts[2] : null;
-    const action = urlParts.length > 3 ? urlParts[3] : null;
+    // Support both consolidated query routing (/api/users?userId=...)
+    // and legacy path routing (/api/users/:id[/approve]).
+    const requestUrl = new URL(req.url || "/api/users", "http://localhost");
+    const pathParts = requestUrl.pathname.split("/").filter(Boolean);
+    const pathUserId = pathParts.length > 2 ? pathParts[2] : null;
+    const pathAction = pathParts.length > 3 ? pathParts[3] : null;
+    const queryUserId = typeof req.query.userId === "string" ? req.query.userId : null;
+    const queryAction = typeof req.query.action === "string" ? req.query.action : null;
+    const userId = queryUserId || pathUserId;
+    const action = queryAction || pathAction;
 
-    // Check if this is attempts endpoint (GET /api/users/attempts)
-    const isAttemptsPath = req.url?.includes("/attempts");
+    // Check if this is attempts endpoint (GET/POST /api/users?action=attempts)
+    const isAttemptsPath = pathParts[2] === "attempts" || action === "attempts";
 
     // ========================
     // GET /api/users/attempts

@@ -15,9 +15,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await connectDB();
     const currentUser = await getUserFromRequest(req);
 
-    // Extract ID from URL (e.g., /api/materials/123)
-    const urlParts = req.url?.split('/').filter(Boolean) || [];
-    const materialId = urlParts.length > 2 ? urlParts[2] : null;
+    // Support both consolidated query routing (/api/materials?materialId=...)
+    // and legacy path routing (/api/materials/:id).
+    const requestUrl = new URL(req.url || "/api/materials", "http://localhost");
+    const pathParts = requestUrl.pathname.split("/").filter(Boolean);
+    const pathMaterialId = pathParts.length > 2 ? pathParts[2] : null;
+    const queryMaterialId = typeof req.query.materialId === "string" ? req.query.materialId : null;
+    const materialId = queryMaterialId || pathMaterialId;
 
     if (!currentUser) {
       return res.status(401).json({ message: "Not authenticated" });

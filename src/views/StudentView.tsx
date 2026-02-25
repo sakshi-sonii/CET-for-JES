@@ -260,13 +260,12 @@ const StudentView: React.FC<StudentViewProps> = ({
           </div>
           <div className="flex items-center gap-4">
             <span className="text-gray-600">Welcome, <b>{user?.name}</b></span>
-                        <button
-                                      onClick={onLogout}
-                                      className="px-6 py-2 rounded-lg font-medium whitespace-nowrap transition"
-                                    >
-                                      <LogOut className="bg-indigo-600 text-white" />
-                                      Logout
-                                    </button>
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+            >
+              <LogOut size={20} /> Logout
+            </button>
           </div>
         </div>
       </nav>

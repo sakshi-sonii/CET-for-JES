@@ -47,7 +47,7 @@ const QuizPlatform: React.FC = () => {
     }
 
     setLoading(true);
-    api("auth/me", "GET")
+    api("auth?action=me", "GET")
       .then(res => {
         if (res?.user) {
           const userData: User = {
@@ -81,7 +81,7 @@ const QuizPlatform: React.FC = () => {
       const promises: Promise<any>[] = [
         api("tests"),
         api("materials"),
-        api("attempts"),
+        api("users?action=attempts"),
         api("courses"),
       ];
 
@@ -149,7 +149,7 @@ const QuizPlatform: React.FC = () => {
     if (!currentTest || !user) return;
 
     try {
-      const res = await api("attempts", "POST", {
+      const res = await api("users?action=attempts", "POST", {
         testId: currentTest._id,
         answers: testAnswers,
       });

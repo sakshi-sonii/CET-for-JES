@@ -900,7 +900,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   ) => {
     setActionLoading(testId);
     try {
-      await api(`tests/${testId}`, 'PATCH', { active: !currentActive });
+      await api(`tests?testId=${encodeURIComponent(testId)}`, 'PATCH', { active: !currentActive });
       const testsData = await api('tests');
       onTestsUpdate(testsData);
     } catch (error: any) {
@@ -915,7 +915,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const handleToggleAnswerKey = async (testId: string, currentShowAnswerKey: boolean) => {
     setActionLoading(`answerkey-${testId}`);
     try {
-      await api(`tests/${testId}`, 'PATCH', { showAnswerKey: !currentShowAnswerKey });
+      await api(`tests?testId=${encodeURIComponent(testId)}`, 'PATCH', { showAnswerKey: !currentShowAnswerKey });
       const testsData = await api('tests');
       onTestsUpdate(testsData);
     } catch (error: any) {
@@ -1919,10 +1919,9 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             <span className="text-gray-600">Welcome, <b>{user?.name}</b></span>
             <button
               onClick={onLogout}
-              className="px-6 py-2 rounded-lg font-medium whitespace-nowrap transition"
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
             >
-              <LogOut className="bg-indigo-600 text-white" />
-              Logout
+              <LogOut size={20} /> Logout
             </button>
           </div>
         </div>
@@ -3522,7 +3521,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               return;
                             try {
                               await api(
-                                `materials/${m._id}`,
+                                `materials?materialId=${encodeURIComponent(m._id)}`,
                                 'DELETE'
                               );
                               const materialsData =
