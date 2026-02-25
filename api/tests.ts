@@ -24,6 +24,13 @@ const hasChunkMeta = (test: any): boolean => {
   return !!getIdString(test?.parentTestId) || Number(test?.chunkInfo?.total || 0) > 1;
 };
 
+const CHUNK_TITLE_SUFFIX_RE = /\s*\(\s*part\s+\d+\s*\/\s*\d+\s*\)\s*$/i;
+
+const normalizeChunkTitle = (value: any): string => {
+  const title = typeof value === "string" ? value : "";
+  return title.replace(CHUNK_TITLE_SUFFIX_RE, "").trim();
+};
+
 const mergeSectionsFromChunks = (tests: any[]): any[] => {
   const sectionMap = new Map<string, any>();
   const sorted = [...tests].sort((a, b) => {
@@ -57,6 +64,7 @@ const mergeChunkGroup = (group: any[]): any => {
   return {
     ...root,
     _id: groupId,
+    title: normalizeChunkTitle(root?.title),
     parentTestId: undefined,
     chunkInfo: undefined,
     sections: mergedSections,
@@ -448,7 +456,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ---- Build test document ----
       const testDoc: any = {
-        title: title.trim(),
+        title: isChunk ? normalizeChunkTitle(title) : title.trim(),
         course,
         testType: effectiveTestType,
         sections: processedSections,

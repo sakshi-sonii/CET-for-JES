@@ -22,6 +22,13 @@ const hasChunkMeta = (test: any): boolean => {
   return !!getIdString(test?.parentTestId) || Number(test?.chunkInfo?.total || 0) > 1;
 };
 
+const CHUNK_TITLE_SUFFIX_RE = /\s*\(\s*part\s+\d+\s*\/\s*\d+\s*\)\s*$/i;
+
+const normalizeChunkTitle = (value: any): string => {
+  const title = typeof value === "string" ? value : "";
+  return title.replace(CHUNK_TITLE_SUFFIX_RE, "").trim();
+};
+
 const mergeSectionsFromChunks = (tests: any[]): any[] => {
   const sectionMap = new Map<string, any>();
   const sorted = [...tests].sort((a, b) => {
@@ -117,9 +124,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .lean()
       );
 
+      const submissionsWithNormalizedTitle = submissions.map((sub: any) => {
+        if (sub?.testId && typeof sub.testId === "object" && sub.testId.title) {
+          return {
+            ...sub,
+            testId: {
+              ...sub.testId,
+              title: normalizeChunkTitle(sub.testId.title),
+            },
+          };
+        }
+        return sub;
+      });
+
       // If student, strip answer details when answer key is hidden
       if (currentUser.role === "student") {
-        const processed = submissions.map((sub: any) => {
+        const processed = submissionsWithNormalizedTitle.map((sub: any) => {
           const test = sub.testId;
           const showAnswerKey = test?.showAnswerKey ?? false;
 
@@ -145,7 +165,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json(processed);
       }
 
-      return res.status(200).json(submissions);
+      return res.status(200).json(submissionsWithNormalizedTitle);
     }
 
     // ========================

@@ -307,8 +307,8 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
         console.log(`Splitting test into ${totalChunks} chunks`);
 
         for (let i = 0; i < chunks.length; i++) {
-          const chunkTitle = totalChunks > 1 ? `${testTitle} (Part ${i + 1}/${totalChunks})` : testTitle;
-          const chunkPayload = buildPayload(chunks[i], chunkTitle);
+          // Keep canonical title identical across chunks; chunk metadata tracks part ordering.
+          const chunkPayload = buildPayload(chunks[i], testTitle);
           const chunkSize = getPayloadSize(chunkPayload);
 
           console.log(`Chunk ${i + 1}/${totalChunks} size: ${(chunkSize / 1024 / 1024).toFixed(2)} MB`);
