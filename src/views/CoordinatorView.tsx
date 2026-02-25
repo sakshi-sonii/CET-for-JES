@@ -104,10 +104,19 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
       // Fetch teacher questions (question banks) from coordinator endpoint
       const courseTests = (await api(`subjects?action=questions&courseId=${encodeURIComponent(courseId)}`, 'GET')) || [];
 
+      // Filter for tests that are either pending review, resubmitted, or accepted by coordinator
+      const availableTests = courseTests.filter((test: any) => {
+        return test.teacherId && (
+          test.reviewStatus === 'submitted_to_coordinator' ||
+          test.reviewStatus === 'changes_requested' ||
+          test.reviewStatus === 'accepted_by_coordinator'
+        );
+      });
+
       // Organize by teacher and subject
       const bankMap = new Map<string, TeacherQuestionsBank>();
 
-      for (const test of courseTests) {
+      for (const test of availableTests) {
         for (const section of test.sections || []) {
           const key = `${test.teacherId}_${section.subject}`;
           if (!bankMap.has(key)) {
@@ -633,11 +642,11 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                         <div>
                           <p className="font-semibold">{test.title}</p>
                           <p className="text-xs text-gray-500">
-                            {test.reviewStatus === 'changes_requested' ? 'Resubmitted after feedback' : 'Submitted to coordinator'}
+                            {test.reviewStatus === 'changes_requested' ? 'Resubmitted after feedback' : 'Pending coordinator review'}
                           </p>
                           {!!test.reviewComment && (
                             <p className="text-sm text-red-700 mt-2 bg-red-50 border border-red-200 rounded p-2">
-                              Previous comment: {test.reviewComment}
+                              Coordinator feedback: {test.reviewComment}
                             </p>
                           )}
                         </div>
@@ -646,7 +655,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                             ? 'bg-red-100 text-red-700'
                             : 'bg-blue-100 text-blue-700'
                         }`}>
-                          {test.reviewStatus === 'changes_requested' ? 'Changes Requested' : 'Pending Review'}
+                          {test.reviewStatus === 'changes_requested' ? 'Changes Requested' : 'Coordinator Review'}
                         </span>
                       </div>
 

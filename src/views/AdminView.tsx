@@ -75,7 +75,7 @@ const AdminView: React.FC<AdminViewProps> = ({
   const pendingUsers = users.filter((u) =>
     u && !u.approved && (u.role === 'teacher' || u.role === 'coordinator')
   )
-  const pendingTests = tests.filter((t) => t && !t.approved && !!t.coordinatorId)
+  const pendingTests = tests.filter((t) => t && !t.approved && !!t.coordinatorId && !t.teacherId)
 
   // Filter out any null/broken submissions
   const validAttempts = (attempts || []).filter(a =>
