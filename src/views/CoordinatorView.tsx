@@ -176,6 +176,90 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     setDraftTest({ ...draftTest, selectedQuestions: updated });
   };
 
+  // Helper function to get payload size in bytes
+  const getPayloadSize = (payload: any): number => {
+    return new Blob([JSON.stringify(payload)]).size;
+  };
+
+  // Helper function to create a payload object
+  const createPayload = (sections: TestSection[], title: string): any => {
+    const payload: any = {
+      title,
+      course: selectedCourse,
+      testType: draftTest.testType,
+      sections,
+      showAnswerKey: draftTest.showAnswerKey,
+    };
+
+    if (draftTest.testType === 'mock') {
+      payload.stream = draftTest.stream;
+      payload.sectionTimings = {
+        physicsChemistry: draftTest.sectionTimings.physicsChemistry,
+        mathsOrBiology: draftTest.sectionTimings.mathsOrBiology,
+      };
+    } else {
+      payload.customDuration = draftTest.customDuration;
+    }
+
+    return payload;
+  };
+
+  // Helper function to split sections into chunks that fit the size limit
+  const splitSectionsIntoChunks = (sections: TestSection[], title: string, sizeLimit: number): TestSection[][] => {
+    const chunks: TestSection[][] = [];
+    let currentChunk: TestSection[] = [];
+
+    for (const section of sections) {
+      let remainingQuestions = [...section.questions];
+
+      while (remainingQuestions.length > 0) {
+        const testPayload = createPayload([...currentChunk, { ...section, questions: remainingQuestions }], title);
+        const payloadSize = getPayloadSize(testPayload);
+
+        if (payloadSize <= sizeLimit) {
+          // All remaining questions fit
+          currentChunk.push({ ...section, questions: remainingQuestions });
+          remainingQuestions = [];
+        } else if (remainingQuestions.length > 1) {
+          // Split questions in half
+          const midpoint = Math.floor(remainingQuestions.length / 2);
+          const fittingQuestions = remainingQuestions.slice(0, midpoint);
+
+          currentChunk.push({ ...section, questions: fittingQuestions });
+
+          // Check if current chunk fits
+          const chunkPayload = createPayload(currentChunk, title);
+          if (getPayloadSize(chunkPayload) <= sizeLimit) {
+            // Current chunk fits, save it and start new one
+            chunks.push(currentChunk);
+            currentChunk = [];
+            remainingQuestions = remainingQuestions.slice(midpoint);
+          } else {
+            // Current chunk still too large, this shouldn't happen if one section fits
+            chunks.push(currentChunk);
+            currentChunk = [];
+            remainingQuestions = remainingQuestions.slice(midpoint);
+          }
+        } else {
+          // Single question left but doesn't fit with current chunk
+          if (currentChunk.length > 0) {
+            chunks.push(currentChunk);
+            currentChunk = [];
+          }
+          // Add single question as new chunk
+          chunks.push([{ ...section, questions: remainingQuestions }]);
+          remainingQuestions = [];
+        }
+      }
+    }
+
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk);
+    }
+
+    return chunks;
+  };
+
   const handleSubmitTest = async () => {
     if (!draftTest.title.trim()) {
       setError('Test title is required');
@@ -235,27 +319,63 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
         });
       }
 
-      const payload: any = {
-        title: draftTest.title.trim(),
-        course: selectedCourse,
-        testType: draftTest.testType,
-        sections,
-        showAnswerKey: draftTest.showAnswerKey,
-      };
+      const testTitle = draftTest.title.trim();
+      const CHUNK_SIZE_LIMIT = 4.5 * 1024 * 1024; // 4.5 MB in bytes
 
-      if (draftTest.testType === 'mock') {
-        payload.stream = draftTest.stream;
-        payload.sectionTimings = {
-          physicsChemistry: draftTest.sectionTimings.physicsChemistry,
-          mathsOrBiology: draftTest.sectionTimings.mathsOrBiology,
-        };
+      // Check if payload fits within limit
+      const initialPayload = createPayload(sections, testTitle);
+      const payloadSize = getPayloadSize(initialPayload);
+
+      const createdTests: any[] = [];
+      let parentTestId: string | null = null;
+
+      if (payloadSize <= CHUNK_SIZE_LIMIT) {
+        // Payload fits within limit, send as is
+        const newTest = await api('tests', 'POST', initialPayload);
+        createdTests.push(newTest);
       } else {
-        payload.customDuration = draftTest.customDuration;
+        // Payload exceeds limit, split into chunks
+        setError('Test size exceeds 4.5 MB, splitting into multiple parts...');
+        
+        const sectionChunks = splitSectionsIntoChunks(sections, testTitle, CHUNK_SIZE_LIMIT);
+        const totalChunks = sectionChunks.length;
+
+        for (let i = 0; i < sectionChunks.length; i++) {
+          const chunkSections = sectionChunks[i];
+          const chunkTitle = totalChunks > 1 ? `${testTitle} (Part ${i + 1}/${totalChunks})` : testTitle;
+          const chunkPayload = createPayload(chunkSections, chunkTitle);
+
+          // On first chunk, don't set parentTestId (this will be the parent)
+          // On subsequent chunks, set parentTestId to first chunk's ID
+          if (i > 0 && parentTestId) {
+            chunkPayload.parentTestId = parentTestId;
+          }
+
+          const newTest = await api('tests', 'POST', chunkPayload);
+          createdTests.push(newTest);
+
+          // For first chunk, set it as parent for subsequent chunks
+          if (i === 0 && totalChunks > 1) {
+            parentTestId = newTest._id;
+            // Update first chunk to know its total chunks
+            await api(`tests?testId=${encodeURIComponent(newTest._id)}`, 'PATCH', {
+              chunkInfo: { current: 1, total: totalChunks },
+            });
+          } else if (i > 0 && parentTestId) {
+            // Update chunk info for non-first chunks
+            await api(`tests?testId=${encodeURIComponent(newTest._id)}`, 'PATCH', {
+              chunkInfo: { current: i + 1, total: totalChunks },
+            });
+          }
+
+          // Small delay between requests to avoid overwhelming the server
+          if (i < sectionChunks.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
       }
 
-      const newTest = await api('tests', 'POST', payload);
-      
-      onTestsUpdate([...tests, newTest]);
+      onTestsUpdate([...tests, ...createdTests]);
       setDraftTest({
         title: '',
         course: selectedCourse,
@@ -269,7 +389,12 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
         customDuration: 60,
         showAnswerKey: false,
       });
-      setError('Test created successfully and sent for approval');
+      
+      const successMsg = createdTests.length > 1 
+        ? `Test created successfully in ${createdTests.length} parts and sent for approval`
+        : 'Test created successfully and sent for approval';
+      
+      setError(successMsg);
       setTimeout(() => setError(''), 3000);
     } catch (err: any) {
       setError(err.message || 'Failed to create test');

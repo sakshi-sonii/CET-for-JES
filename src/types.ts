@@ -39,6 +39,14 @@ export interface Test {
   teacherId?: string | { _id: string; name?: string };
   coordinatorId?: string | { _id: string; name?: string };
 
+  // For chunked tests: ID of the parent test group
+  parentTestId?: string;
+  // For chunked tests: indicates this is a chunk (e.g., "1/3")
+  chunkInfo?: {
+    current: number;
+    total: number;
+  };
+
   testType: TestType;
 
   // Which stream this mock test belongs to (only relevant for testType 'mock')

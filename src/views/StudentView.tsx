@@ -106,7 +106,88 @@ const StudentView: React.FC<StudentViewProps> = ({
   };
 
   const studentCourse = courses.find(c => c._id === user.course);
-  const availableTests = tests.filter(t => t.approved && t.active && t.course === user.course);
+  
+  // Group chunked tests together
+  const groupedTests = (() => {
+    const groups = new Map<string, Test[]>();
+    const processed = new Set<string>();
+
+    for (const test of tests) {
+      if (processed.has(test._id)) continue;
+
+      if (test.parentTestId) {
+        // This is a chunk, find its parent group
+        const groupKey = test.parentTestId;
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, []);
+        }
+        groups.get(groupKey)!.push(test);
+        processed.add(test._id);
+      } else if (test.chunkInfo && test.chunkInfo.total > 1) {
+        // This is the first chunk/parent of a group
+        const groupKey = test._id;
+        const groupTests = [test];
+        
+        // Find all chunks for this parent
+        for (const otherTest of tests) {
+          if (otherTest.parentTestId === test._id) {
+            groupTests.push(otherTest);
+            processed.add(otherTest._id);
+          }
+        }
+        
+        // Sort by chunk current number
+        groupTests.sort((a, b) => {
+          const aChunk = a.chunkInfo?.current ?? 0;
+          const bChunk = b.chunkInfo?.current ?? 0;
+          return aChunk - bChunk;
+        });
+
+        groups.set(groupKey, groupTests);
+        processed.add(test._id);
+      } else {
+        // Standalone test
+        groups.set(test._id, [test]);
+        processed.add(test._id);
+      }
+    }
+
+    return groups;
+  })();
+
+  // Helper to combine sections from multiple tests (chunks)
+  const getCombinedSections = (testGroup: Test[]): any[] => {
+    const combinedSections: any[] = [];
+    const sectionMap = new Map<string, any>();
+
+    for (const test of testGroup) {
+      for (const section of test.sections || []) {
+        if (!sectionMap.has(section.subject)) {
+          sectionMap.set(section.subject, {
+            subject: section.subject,
+            marksPerQuestion: section.marksPerQuestion,
+            questions: [],
+          });
+        }
+        sectionMap.get(section.subject).questions.push(...(section.questions || []));
+      }
+    }
+
+    return Array.from(sectionMap.values());
+  };
+
+  const availableTests = Array.from(groupedTests.values())
+    .map(testGroup => {
+      const primaryTest = testGroup[0];
+      // Create a merged test object for display
+      return {
+        ...primaryTest,
+        sections: getCombinedSections(testGroup),
+        _isChunkedTest: testGroup.length > 1,
+        _testChunks: testGroup,
+      };
+    })
+    .filter(t => t.approved && t.active && t.course === user.course);
 
   const myAttempts = attempts.filter(a => {
     const sid: any = a.studentId;
@@ -305,6 +386,12 @@ const StudentView: React.FC<StudentViewProps> = ({
                 const alreadyAttempted = myAttempts.some(a => {
                   const rawTestId: any = a.testId;
                   const testIdStr = typeof rawTestId === 'string' ? rawTestId : rawTestId?._id;
+                  
+                  // Check if this attempt is for any chunk in this test group
+                  if ((t as any)._isChunkedTest && (t as any)._testChunks) {
+                    return (t as any)._testChunks.some((chunk: Test) => chunk._id === testIdStr);
+                  }
+                  
                   return testIdStr === t._id;
                 });
 
@@ -319,6 +406,11 @@ const StudentView: React.FC<StudentViewProps> = ({
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-xl font-bold">{t.title}</h3>
                           {getTestTypeBadge(t)}
+                          {(t as any)._isChunkedTest && (
+                            <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs font-medium">
+                              Multi-part Test ({(t as any)._testChunks?.length || 0} sections)
+                            </span>
+                          )}
                         </div>
 
                         {/* Section breakdown */}
@@ -356,6 +448,13 @@ const StudentView: React.FC<StudentViewProps> = ({
 
                         {/* Timing breakdown */}
                         {getTimingDescription(t)}
+
+                        {/* Multi-part test note */}
+                        {(t as any)._isChunkedTest && (
+                          <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+                            <span className="font-semibold">ℹ️ Multi-part Test:</span> This test is divided into {(t as any)._testChunks?.length || 0} parts. Once you start, all parts are combined into one continuous experience. You must complete all parts in one session.
+                          </div>
+                        )}
 
                         {/* Mock test warning */}
                         {t.testType === 'mock' && (
