@@ -208,6 +208,40 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   }, [user._id]);
 
   // ========================
+  // POLL FOR TEST UPDATES (approval status)
+  // ========================
+  useEffect(() => {
+    // Set up polling to refresh tests every 15 seconds
+    // This ensures tests approved by admin are reflected in real-time
+    const pollInterval = setInterval(async () => {
+      try {
+        const updatedTests = await api('tests');
+        if (updatedTests && Array.isArray(updatedTests)) {
+          const myTests = updatedTests.filter(t => {
+            const tid = typeof t.teacherId === 'string' ? t.teacherId : String(t.teacherId);
+            const uid = String(user._id);
+            return tid === uid;
+          });
+          
+          // Only update if there are changes (approval status changed)
+          const hasChanges = myTests.some((newTest) => {
+            const oldTest = tests.find(t => t._id === newTest._id);
+            return oldTest && oldTest.approved !== newTest.approved;
+          });
+          
+          if (hasChanges) {
+            onTestsUpdate(updatedTests);
+          }
+        }
+      } catch (error) {
+        // Silently fail - don't spam console
+      }
+    }, 15000); // Poll every 15 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [user._id, tests, onTestsUpdate]);
+
+  // ========================
   // SAVE DRAFTS TO LOCALSTORAGE
   // ========================
   const persistDrafts = useCallback((updatedDrafts: DraftTest[]) => {
@@ -1953,6 +1987,25 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         {/* ======================== TESTS TAB ======================== */}
         {activeTab === 'tests' && (
           <div className="space-y-4">
+            {/* Refresh button */}
+            <div className="flex justify-between items-center">
+              <h2 className="text-lg font-semibold">Your Tests</h2>
+              <button
+                onClick={async () => {
+                  try {
+                    const freshTests = await api('tests');
+                    onTestsUpdate(freshTests);
+                  } catch (error) {
+                    console.error('Failed to refresh:', error);
+                  }
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition border border-blue-200 text-sm font-medium"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh Status
+              </button>
+            </div>
+
             {myTests.length === 0 ? (
               <div className="bg-white rounded-lg shadow p-8 text-center">
                 <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
