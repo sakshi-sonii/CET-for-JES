@@ -440,6 +440,25 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
 
                             {isExpanded && (
                               <div className="p-4 bg-white border-t border-gray-200 space-y-3">
+                                <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                  <input
+                                    type="checkbox"
+                                    checked={selected?.questionIndices.length === bank.questions.length && bank.questions.length > 0}
+                                    onChange={() => {
+                                      if (selected?.questionIndices.length === bank.questions.length) {
+                                        selectQuestionsFromBank(bank, []);
+                                      } else {
+                                        const allIndices = bank.questions.map((_, idx) => idx);
+                                        selectQuestionsFromBank(bank, allIndices);
+                                      }
+                                    }}
+                                    className="w-4 h-4"
+                                  />
+                                  <label className="font-semibold text-blue-700 cursor-pointer flex-1">
+                                    Select All ({bank.questions.length} questions)
+                                  </label>
+                                </div>
+
                                 {bank.questions.map((q, idx) => {
                                   const isSelected = selected?.questionIndices.includes(idx);
                                   return (
