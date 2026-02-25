@@ -132,6 +132,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         customSubjects,
         showAnswerKey = false,
       } = req.body;
+      const isTeacherSubmission = currentUser.role === "teacher";
+      const effectiveTestType = isTeacherSubmission ? "custom" : testType;
 
       // ---- Basic validation ----
       if (!title?.trim()) {
@@ -143,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!sections || !Array.isArray(sections) || sections.length === 0) {
         return res.status(400).json({ message: "At least one section is required" });
       }
-      if (!["mock", "custom"].includes(testType)) {
+      if (!["mock", "custom"].includes(effectiveTestType)) {
         return res.status(400).json({ message: "testType must be 'mock' or 'custom'" });
       }
 
@@ -228,7 +230,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ---- Mock test validation ----
-      if (testType === "mock") {
+      if (effectiveTestType === "mock") {
         // Must have physics and chemistry
         if (!providedSubjects.includes("physics") || !providedSubjects.includes("chemistry")) {
           return res.status(400).json({
@@ -254,7 +256,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ---- Custom test validation ----
-      if (testType === "custom") {
+      if (effectiveTestType === "custom" && !isTeacherSubmission) {
         const duration = customDuration || 60;
         if (duration < 1 || duration > 600) {
           return res.status(400).json({
@@ -285,7 +287,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ---- Determine stream for mock tests ----
       let resolvedStream = stream;
-      if (testType === "mock" && !resolvedStream) {
+      if (effectiveTestType === "mock" && !resolvedStream) {
         if (providedSubjects.includes("biology") && !providedSubjects.includes("maths")) {
           resolvedStream = "PCB";
         } else {
@@ -297,9 +299,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const testDoc: any = {
         title: title.trim(),
         course,
-        testType,
+        testType: effectiveTestType,
         sections: processedSections,
-        showAnswerKey: !!showAnswerKey,
+        // Coordinator/Admin control this; teacher submissions always start hidden.
+        showAnswerKey: false,
         approved: false,
         active: false,
       };
@@ -307,17 +310,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Set creator based on role
       if (currentUser.role === "teacher") {
         testDoc.teacherId = new mongoose.Types.ObjectId(currentUser._id.toString());
+        testDoc.reviewStatus = "submitted_to_coordinator";
+        testDoc.reviewComment = "";
+        testDoc.testType = "custom";
+        testDoc.customDuration = 60;
+        testDoc.customSubjects = providedSubjects;
       } else if (currentUser.role === "coordinator") {
         testDoc.coordinatorId = new mongoose.Types.ObjectId(currentUser._id.toString());
+        testDoc.reviewStatus = "submitted_to_admin";
+        testDoc.reviewComment = "";
+        testDoc.showAnswerKey = !!showAnswerKey;
       }
 
-      if (testType === "mock") {
+      if (effectiveTestType === "mock" && !isTeacherSubmission) {
         testDoc.stream = resolvedStream;
         testDoc.sectionTimings = {
           physicsChemistry: sectionTimings?.physicsChemistry ?? 90,
           mathsOrBiology: sectionTimings?.mathsOrBiology ?? 90,
         };
-      } else {
+      } else if (!isTeacherSubmission) {
         testDoc.customDuration = customDuration ?? 60;
         testDoc.customSubjects = providedSubjects;
       }
@@ -399,9 +410,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const updated = await withRetry(() =>
           Test.findByIdAndUpdate(
             testId,
-            { approved: true },
+            { approved: true, reviewStatus: "approved", reviewedAt: new Date() },
             { new: true }
           ).lean()
+        );
+
+        return res.status(200).json(updated);
+      }
+
+      // Handle coordinator review of teacher question banks
+      if (action === "review") {
+        if (currentUser.role !== "coordinator") {
+          return res.status(403).json({ message: "Only coordinator can review teacher submissions" });
+        }
+
+        const { decision, comment } = req.body || {};
+        if (!["accept", "return"].includes(decision)) {
+          return res.status(400).json({ message: "decision must be 'accept' or 'return'" });
+        }
+        if (decision === "return" && !String(comment || "").trim()) {
+          return res.status(400).json({ message: "Comment is required when sending back for edits" });
+        }
+
+        const test = await withRetry(() =>
+          Test.findOne({
+            _id: testId,
+            teacherId: { $exists: true, $ne: null },
+            approved: false,
+          })
+            .select("_id reviewStatus")
+            .lean()
+        );
+
+        if (!test) {
+          return res.status(404).json({ message: "Teacher submission not found" });
+        }
+
+        const update: any =
+          decision === "accept"
+            ? {
+                reviewStatus: "accepted_by_coordinator",
+                reviewComment: "",
+              }
+            : {
+                reviewStatus: "changes_requested",
+                reviewComment: String(comment).trim(),
+              };
+
+        update.reviewedAt = new Date();
+        update.reviewedBy = new mongoose.Types.ObjectId(currentUser._id.toString());
+
+        const updated = await withRetry(() =>
+          Test.findByIdAndUpdate(testId, update, { new: true }).lean()
         );
 
         return res.status(200).json(updated);
@@ -432,7 +492,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const test = await withRetry(() =>
           Test.findOne(query)
-            .select("approved")
+            .select("approved reviewStatus")
             .lean()
         );
 
@@ -442,43 +502,68 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(403).json({ message: "Access denied" });
         }
 
-        // Can always toggle these
-        if (active !== undefined && test.approved) {
-          update.active = !!active;
+        // Coordinator/Admin control publish switches; teacher cannot toggle these.
+        if (currentUser.role === "teacher" && (active !== undefined || showAnswerKey !== undefined)) {
+          return res.status(403).json({ message: "Only coordinator/admin can change active status or answer key visibility" });
         }
 
-        if (showAnswerKey !== undefined) {
-          update.showAnswerKey = !!showAnswerKey;
+        if (currentUser.role === "coordinator") {
+          if (active !== undefined && test.approved) {
+            update.active = !!active;
+          }
+          if (showAnswerKey !== undefined) {
+            update.showAnswerKey = !!showAnswerKey;
+          }
         }
 
         // Can update content only if NOT approved
         if (!test.approved) {
-          if (title?.trim()) update.title = title.trim();
+          if (currentUser.role === "teacher" && test.reviewStatus === "accepted_by_coordinator") {
+            return res.status(400).json({ message: "Submission already accepted by coordinator and locked for edits" });
+          }
+
+          let teacherEdited = false;
+          if (title?.trim()) {
+            update.title = title.trim();
+            if (currentUser.role === "teacher") teacherEdited = true;
+          }
           if (testType && ["mock", "custom"].includes(testType)) {
             update.testType = testType;
+            if (currentUser.role === "teacher") teacherEdited = true;
           }
           if (stream && ["PCM", "PCB"].includes(stream)) {
             update.stream = stream;
+            if (currentUser.role === "teacher") teacherEdited = true;
           }
           if (sections && Array.isArray(sections) && sections.length > 0) {
             update.sections = buildProcessedSections(sections);
+            if (currentUser.role === "teacher") teacherEdited = true;
           }
           if (sectionTimings) {
             update.sectionTimings = {
               physicsChemistry: sectionTimings.physicsChemistry ?? 90,
               mathsOrBiology: sectionTimings.mathsOrBiology ?? 90,
             };
+            if (currentUser.role === "teacher") teacherEdited = true;
           }
           if (customDuration !== undefined) {
             const dur = Number(customDuration);
             if (dur >= 1 && dur <= 600) {
               update.customDuration = dur;
+              if (currentUser.role === "teacher") teacherEdited = true;
             }
           }
           if (customSubjects && Array.isArray(customSubjects)) {
             update.customSubjects = customSubjects.filter(
               (s: string) => VALID_SUBJECTS.includes(s)
             );
+            if (currentUser.role === "teacher") teacherEdited = true;
+          }
+
+          // Teacher re-submission after feedback
+          if (currentUser.role === "teacher" && teacherEdited) {
+            update.reviewStatus = "submitted_to_coordinator";
+            update.reviewComment = "";
           }
         }
       } else {

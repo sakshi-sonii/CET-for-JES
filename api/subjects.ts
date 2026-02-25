@@ -47,6 +47,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           course: new mongoose.Types.ObjectId(courseId as string),
           teacherId: { $exists: true }, // Created by a teacher
           approved: false, // Not yet combined into a final test by coordinat
+          reviewStatus: "accepted_by_coordinator", // Only approved question banks
         };
 
         if (subjectId) {

@@ -66,6 +66,15 @@ export interface Test {
   // When true, students can view correct answers and explanations
   showAnswerKey: boolean;
 
+  // Teacher -> Coordinator -> Admin workflow
+  reviewStatus?:
+    | 'submitted_to_coordinator'
+    | 'changes_requested'
+    | 'accepted_by_coordinator'
+    | 'submitted_to_admin'
+    | 'approved';
+  reviewComment?: string;
+
   approved: boolean;
   active: boolean;
   createdAt?: string;

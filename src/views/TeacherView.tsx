@@ -432,15 +432,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     }, 0);
   };
 
-  // Determine if current selection qualifies as mock
-  const isMockEligible = (): boolean => {
-    const hasPhy = selectedSubjects.includes('physics');
-    const hasChem = selectedSubjects.includes('chemistry');
-    const hasMaths = selectedSubjects.includes('maths');
-    const hasBio = selectedSubjects.includes('biology');
-    return hasPhy && hasChem && (hasMaths || hasBio) && selectedSubjects.length >= 3;
-  };
-
   // Auto-detect stream from subjects
   const detectStream = (subjects: SubjectKey[]): CourseStream => {
     if (subjects.includes('biology') && !subjects.includes('maths')) return 'PCB';
@@ -796,31 +787,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         return;
     }
 
-    // Validate mock test requirements
-    if (testType === 'mock') {
-      const activeSections = sections.filter(s => s.questions.length > 0);
-      const activeSubjects = activeSections.map(s => s.subject);
-      const hasPhy = activeSubjects.includes('physics');
-      const hasChem = activeSubjects.includes('chemistry');
-      const hasMaths = activeSubjects.includes('maths');
-      const hasBio = activeSubjects.includes('biology');
-
-      if (!hasPhy || !hasChem) {
-        alert('Mock test requires both Physics and Chemistry sections');
-        return;
-      }
-      if (!hasMaths && !hasBio) {
-        alert('Mock test requires either Mathematics or Biology section');
-        return;
-      }
-    }
-
-    // Validate custom test duration
-    if (testType === 'custom' && (!customDuration || customDuration < 1)) {
-      alert('Please set a valid duration for the custom test');
-      return;
-    }
-
     setActionLoading('create');
 
     try {
@@ -830,8 +796,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       const payload: any = {
         title: testTitle,
         course: testCourse,
-        testType,
-        showAnswerKey: showAnswerKeyOnCreate,
+        testType: 'custom',
+        showAnswerKey: false,
         sections: filteredSections.map(s => ({
           subject: s.subject,
           marksPerQuestion: getMarksPerQuestion(s.subject),
@@ -850,16 +816,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         })),
       };
 
-      if (testType === 'mock') {
-        payload.stream = stream;
-        payload.sectionTimings = {
-          physicsChemistry: phyChemTime,
-          mathsOrBiology: mathBioTime,
-        };
-      } else {
-        payload.customDuration = customDuration;
-        payload.customSubjects = activeSubjects;
-      }
+      payload.customDuration = 60;
+      payload.customSubjects = activeSubjects;
 
       await api('tests', 'POST', payload);
 
@@ -880,7 +838,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       setShowAnswerKeyOnCreate(false);
       resetQuestionForm();
 
-      alert('Test created! Awaiting admin approval.');
+      alert('Question bank submitted to coordinator for review.');
       setActiveTab('tests');
       const testsData = await api('tests');
       onTestsUpdate(testsData);
@@ -889,39 +847,6 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     } finally {
       setActionLoading(null);
     }
-  };
-
-  // ========================
-  // Toggle active
-  // ========================
-  const handleToggleActive = async (
-    testId: string,
-    currentActive: boolean
-  ) => {
-    setActionLoading(testId);
-    try {
-      await api(`tests?testId=${encodeURIComponent(testId)}`, 'PATCH', { active: !currentActive });
-      const testsData = await api('tests');
-      onTestsUpdate(testsData);
-    } catch (error: any) {
-      alert(error.message || 'Failed to update test');
-    }
-    setActionLoading(null);
-  };
-
-  // ========================
-  // Toggle answer key visibility
-  // ========================
-  const handleToggleAnswerKey = async (testId: string, currentShowAnswerKey: boolean) => {
-    setActionLoading(`answerkey-${testId}`);
-    try {
-      await api(`tests?testId=${encodeURIComponent(testId)}`, 'PATCH', { showAnswerKey: !currentShowAnswerKey });
-      const testsData = await api('tests');
-      onTestsUpdate(testsData);
-    } catch (error: any) {
-      alert(error.message || 'Failed to update answer key visibility');
-    }
-    setActionLoading(null);
   };
 
   // ========================
@@ -2103,20 +2028,26 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               : 'bg-yellow-100 text-yellow-800'
                           }`}
                         >
-                          {t.approved ? 'Approved' : 'Pending Approval'}
+                          {t.approved ? 'Approved by Admin' : 'Pending Admin Approval'}
                         </span>
-                        {t.approved && (
+                        {/* Coordinator review status */}
+                        {!t.approved && (
                           <span
                             className={`px-3 py-1 rounded text-sm ${
-                              t.active
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-gray-100 text-gray-800'
+                              t.reviewStatus === 'changes_requested'
+                                ? 'bg-red-100 text-red-800'
+                                : t.reviewStatus === 'accepted_by_coordinator'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-blue-100 text-blue-800'
                             }`}
                           >
-                            {t.active ? 'Active' : 'Inactive'}
+                            {t.reviewStatus === 'changes_requested'
+                              ? 'Changes Requested by Coordinator'
+                              : t.reviewStatus === 'accepted_by_coordinator'
+                              ? 'Accepted by Coordinator'
+                              : 'Submitted to Coordinator'}
                           </span>
                         )}
-                        {/* Answer key visibility badge */}
                         <span
                           className={`px-3 py-1 rounded text-sm inline-flex items-center gap-1 ${
                             t.showAnswerKey
@@ -2137,55 +2068,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                           )}
                         </span>
                       </div>
-                    </div>
 
-                    <div className="flex flex-col gap-2 ml-4 shrink-0">
-                      {t.approved && (
-                        <button
-                          disabled={actionLoading === t._id}
-                          onClick={() =>
-                            handleToggleActive(t._id, t.active)
-                          }
-                          className={`px-4 py-2 rounded-lg disabled:opacity-60 whitespace-nowrap text-sm ${
-                            t.active
-                              ? 'bg-red-600 text-white hover:bg-red-700'
-                              : 'bg-green-600 text-white hover:bg-green-700'
-                          }`}
-                        >
-                          {actionLoading === t._id
-                            ? '...'
-                            : t.active
-                            ? 'Deactivate'
-                            : 'Activate'}
-                        </button>
+                      {!!t.reviewComment && (
+                        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+                          <span className="font-semibold">Coordinator Comment:</span> {t.reviewComment}
+                        </div>
                       )}
-
-                      {/* Answer key toggle button */}
-                      <button
-                        disabled={actionLoading === `answerkey-${t._id}`}
-                        onClick={() =>
-                          handleToggleAnswerKey(t._id, t.showAnswerKey)
-                        }
-                        className={`px-4 py-2 rounded-lg disabled:opacity-60 whitespace-nowrap text-sm inline-flex items-center gap-1 ${
-                          t.showAnswerKey
-                            ? 'bg-red-100 text-red-700 hover:bg-red-200 border border-red-300'
-                            : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border border-emerald-300'
-                        }`}
-                      >
-                        {actionLoading === `answerkey-${t._id}` ? (
-                          '...'
-                        ) : t.showAnswerKey ? (
-                          <>
-                            <EyeOff className="w-3.5 h-3.5" />
-                            Hide Answers
-                          </>
-                        ) : (
-                          <>
-                            <Eye className="w-3.5 h-3.5" />
-                            Show Answers
-                          </>
-                        )}
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -2376,11 +2264,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
               {selectedSubjects.length > 0 && (
                 <div className="mt-3 text-sm">
-                  <span className="font-medium">
-                    {testType === 'mock'
-                      ? `📋 Mock Test (${stream}): `
-                      : '⚡ Custom Test: '}
-                  </span>
+                  <span className="font-medium">🧩 Question Bank Subjects: </span>
                   {selectedSubjects
                     .map(s => getSubjectInfo(s).label)
                     .join(' + ')}
@@ -2390,211 +2274,29 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
             {hasAssignedSubjects && selectedSubjects.length > 0 && (
               <>
-              {/* ======================== TEST TYPE & TIMING CONFIG ======================== */}
+              {/* ======================== SUBMISSION WORKFLOW NOTE ======================== */}
               <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
                 <h3 className="font-semibold text-amber-800 mb-3 flex items-center gap-2">
                   <Settings className="w-5 h-5" />
-                  Test Type & Timing
+                  Teacher Submission Workflow
                 </h3>
 
-                {/* Test type selector */}
-                <div className="flex gap-3 mb-4">
-                  {isMockEligible() && (
-                    <button
-                      onClick={() => setTestType('mock')}
-                      className={`flex-1 p-4 rounded-lg border-2 text-left transition ${
-                        testType === 'mock'
-                          ? 'border-violet-500 bg-violet-50 ring-2 ring-violet-200'
-                          : 'border-gray-200 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <div className="font-semibold text-sm flex items-center gap-2">
-                        <Clock className="w-4 h-4" />
-                        Mock Test
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        Two-phase timing: Phy+Chem → then Maths/Bio.
-                        <br />
-                        Phase 1 auto-submits, no going back.
-                      </p>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setTestType('custom')}
-                    className={`flex-1 p-4 rounded-lg border-2 text-left transition ${
-                      testType === 'custom'
-                        ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
-                        : 'border-gray-200 bg-white hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="font-semibold text-sm flex items-center gap-2">
-                      <Clock className="w-4 h-4" />
-                      Custom Timed Test
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Single timer for all subjects.
-                      <br />
-                      Students can switch between subjects freely.
-                    </p>
-                  </button>
+                <div className="bg-white rounded-lg border p-4 text-sm text-gray-700">
+                  Teachers submit subject question banks only.
+                  <br />
+                  Coordinator decides final test type (mock/custom), timings, activation, and answer-key visibility.
                 </div>
 
-                {/* Mock test timing config */}
-                {testType === 'mock' && isMockEligible() && (
-                  <div className="bg-white rounded-lg border p-4">
-                    <h4 className="font-medium text-sm text-gray-700 mb-3">
-                      ⏱ Mock Test Timing Configuration
-                    </h4>
-
-                    {/* Stream selector */}
-                    {selectedSubjects.includes('maths') && selectedSubjects.includes('biology') && (
-                      <div className="mb-3">
-                        <label className="text-xs font-medium text-gray-600 block mb-1">
-                          Stream
-                        </label>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setStream('PCM')}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                              stream === 'PCM'
-                                ? 'bg-purple-600 text-white'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
-                          >
-                            PCM (Physics, Chemistry, Maths)
-                          </button>
-                          <button
-                            onClick={() => setStream('PCB')}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                              stream === 'PCB'
-                                ? 'bg-orange-600 text-white'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
-                          >
-                            PCB (Physics, Chemistry, Biology)
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-xs font-medium text-gray-600 block mb-1">
-                          Phase 1: Physics + Chemistry (minutes)
-                        </label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={300}
-                          value={phyChemTime}
-                          onChange={e => setPhyChemTime(Math.max(1, parseInt(e.target.value) || 90))}
-                          className="w-full px-4 py-2 border rounded-lg"
-                        />
-                        <p className="text-xs text-gray-400 mt-1">
-                          Auto-submits when time expires. Students can submit early.
-                        </p>
-                      </div>
-                      <div>
-                        <label className="text-xs font-medium text-gray-600 block mb-1">
-                          Phase 2: {stream === 'PCB' ? 'Biology' : 'Mathematics'} (minutes)
-                        </label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={300}
-                          value={mathBioTime}
-                          onChange={e => setMathBioTime(Math.max(1, parseInt(e.target.value) || 90))}
-                          className="w-full px-4 py-2 border rounded-lg"
-                        />
-                        <p className="text-xs text-gray-400 mt-1">
-                          Starts after Phase 1 is submitted. Cannot go back.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 p-3 bg-violet-50 rounded border border-violet-200">
-                      <p className="text-sm text-violet-800">
-                        <strong>Total Duration:</strong> {phyChemTime + mathBioTime} minutes
-                        <br />
-                        <span className="text-xs">
-                          Phase 1 ({phyChemTime}min): Physics + Chemistry → auto-submit →
-                          Phase 2 ({mathBioTime}min): {stream === 'PCB' ? 'Biology' : 'Mathematics'}
-                        </span>
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Custom test timing config */}
-                {testType === 'custom' && (
-                  <div className="bg-white rounded-lg border p-4">
-                    <h4 className="font-medium text-sm text-gray-700 mb-3">
-                      ⏱ Custom Test Duration
-                    </h4>
-                    <div>
-                      <label className="text-xs font-medium text-gray-600 block mb-1">
-                        Total Duration (minutes)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={600}
-                        value={customDuration}
-                        onChange={e => setCustomDuration(Math.max(1, parseInt(e.target.value) || 60))}
-                        className="w-full px-4 py-2 border rounded-lg"
-                      />
-                      <p className="text-xs text-gray-400 mt-1">
-                        Single timer for all subjects. Students can freely switch between subjects.
-                      </p>
-                    </div>
-
-                    <div className="mt-3 p-3 bg-indigo-50 rounded border border-indigo-200">
-                      <p className="text-sm text-indigo-800">
-                        <strong>Subjects:</strong>{' '}
-                        {selectedSubjects.map(s => getSubjectInfo(s).label).join(', ')}
-                        <br />
-                        <strong>Duration:</strong> {customDuration} minutes total
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Answer key visibility setting */}
+                {/* Workflow note */}
                 <div className="mt-4 bg-white rounded-lg border p-4">
                   <h4 className="font-medium text-sm text-gray-700 mb-2 flex items-center gap-2">
-                    {showAnswerKeyOnCreate ? (
-                      <Eye className="w-4 h-4 text-emerald-600" />
-                    ) : (
-                      <EyeOff className="w-4 h-4 text-red-500" />
-                    )}
-                    Answer Key & Explanations
+                    <EyeOff className="w-4 h-4 text-gray-500" />
+                    Publication Controls
                   </h4>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setShowAnswerKeyOnCreate(!showAnswerKeyOnCreate)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        showAnswerKeyOnCreate ? 'bg-emerald-500' : 'bg-gray-300'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          showAnswerKeyOnCreate ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-                    <div>
-                      <p className="text-sm font-medium">
-                        {showAnswerKeyOnCreate
-                          ? 'Answer key visible to students immediately'
-                          : 'Answer key hidden from students'}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {showAnswerKeyOnCreate
-                          ? 'Students will see correct answers and explanations after submitting.'
-                          : 'Students will only see their score. You can enable answer key later from the Tests tab.'}
-                      </p>
-                    </div>
-                  </div>
+                  <p className="text-sm text-gray-600">
+                    After you submit this question bank, the coordinator reviews it.
+                    Activation and answer-key visibility are controlled by coordinator/admin.
+                  </p>
                 </div>
               </div>
               </>
@@ -3314,17 +3016,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     : `${customDuration} min`}
                 </div>
                 <div className="mt-1 text-xs text-gray-500 flex items-center gap-1">
-                  {showAnswerKeyOnCreate ? (
-                    <>
-                      <Eye className="w-3 h-3 text-emerald-600" />
-                      Answer key will be visible to students
-                    </>
-                  ) : (
-                    <>
-                      <EyeOff className="w-3 h-3 text-red-500" />
-                      Answer key hidden until you enable it
-                    </>
-                  )}
+                  <EyeOff className="w-3 h-3 text-gray-500" />
+                  Answer key visibility and activation are controlled by coordinator/admin
                 </div>
               </div>
             )}
@@ -3338,8 +3031,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-60 transition"
                 >
                   {actionLoading === 'create'
-                    ? 'Creating...'
-                    : 'Submit Test for Approval'}
+                    ? 'Submitting...'
+                    : 'Submit Question Bank to Coordinator'}
                 </button>
                 <button
                   onClick={saveDraftManually}

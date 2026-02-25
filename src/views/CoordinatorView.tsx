@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LogOut, Save, ChevronDown, ChevronUp } from 'lucide-react';
+import { LogOut, Save, ChevronDown, ChevronUp, CheckCircle, XCircle, Eye, EyeOff } from 'lucide-react';
 import type { User, Test, Course, TestSection, Question } from '../types';
 import { api } from '../api';
 
@@ -37,6 +37,10 @@ interface DraftComposedTest {
   course: string;
   testType: 'mock' | 'custom';
   stream?: 'PCM' | 'PCB';
+  sectionTimings: {
+    physicsChemistry: number;
+    mathsOrBiology: number;
+  };
   selectedQuestions: {
     subject: SubjectKey;
     sourceTeacherId: string;
@@ -66,15 +70,25 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     course: '',
     testType: 'custom',
     stream: 'PCM',
+    sectionTimings: {
+      physicsChemistry: 90,
+      mathsOrBiology: 90,
+    },
     selectedQuestions: [],
     customDuration: 60,
     showAnswerKey: false,
   });
 
   const [creatingTest, setCreatingTest] = useState(false);
+  const [reviewComment, setReviewComment] = useState<Record<string, string>>({});
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const myTests = tests.filter(t => t.coordinatorId === user._id || (typeof t.coordinatorId === 'object' && t.coordinatorId?._id === user._id));
   const pendingApproval = myTests.filter(t => !t.approved);
+  const teacherSubmissions = tests.filter(t => !!t.teacherId && !t.approved);
+  const pendingTeacherReview = teacherSubmissions.filter(
+    t => t.reviewStatus !== 'accepted_by_coordinator'
+  );
 
   // Fetch teacher questions when course changes
   useEffect(() => {
@@ -170,6 +184,22 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
       setError('Please select at least one subject with questions');
       return;
     }
+    if (draftTest.testType === 'custom' && (!draftTest.customDuration || draftTest.customDuration < 1)) {
+      setError('Custom test duration must be at least 1 minute');
+      return;
+    }
+    if (
+      draftTest.testType === 'mock' &&
+      (
+        !draftTest.sectionTimings.physicsChemistry ||
+        draftTest.sectionTimings.physicsChemistry < 1 ||
+        !draftTest.sectionTimings.mathsOrBiology ||
+        draftTest.sectionTimings.mathsOrBiology < 1
+      )
+    ) {
+      setError('Both mock phase timings must be at least 1 minute');
+      return;
+    }
 
     setCreatingTest(true);
     setError('');
@@ -210,7 +240,10 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
 
       if (draftTest.testType === 'mock') {
         payload.stream = draftTest.stream;
-        payload.sectionTimings = { physicsChemistry: 90, mathsOrBiology: 90 };
+        payload.sectionTimings = {
+          physicsChemistry: draftTest.sectionTimings.physicsChemistry,
+          mathsOrBiology: draftTest.sectionTimings.mathsOrBiology,
+        };
       } else {
         payload.customDuration = draftTest.customDuration;
       }
@@ -223,6 +256,10 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
         course: selectedCourse,
         testType: 'custom',
         stream: 'PCM',
+        sectionTimings: {
+          physicsChemistry: 90,
+          mathsOrBiology: 90,
+        },
         selectedQuestions: [],
         customDuration: 60,
         showAnswerKey: false,
@@ -233,6 +270,58 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
       setError(err.message || 'Failed to create test');
     } finally {
       setCreatingTest(false);
+    }
+  };
+
+  const handleReviewSubmission = async (testId: string, decision: 'accept' | 'return') => {
+    try {
+      if (decision === 'return' && !reviewComment[testId]?.trim()) {
+        setError('Please add a comment before sending back to teacher');
+        return;
+      }
+
+      setActionLoading(`${decision}-${testId}`);
+      await api(`tests?testId=${encodeURIComponent(testId)}&action=review`, 'PATCH', {
+        decision,
+        comment: reviewComment[testId] || '',
+      });
+      const testsData = await api('tests');
+      onTestsUpdate(testsData);
+      if (decision === 'accept') {
+        setReviewComment(prev => ({ ...prev, [testId]: '' }));
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to review submission');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleToggleActive = async (testId: string, currentActive: boolean) => {
+    try {
+      setActionLoading(`active-${testId}`);
+      await api(`tests?testId=${encodeURIComponent(testId)}`, 'PATCH', { active: !currentActive });
+      const testsData = await api('tests');
+      onTestsUpdate(testsData);
+    } catch (err: any) {
+      setError(err.message || 'Failed to update active status');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleToggleAnswerKey = async (testId: string, currentShowAnswerKey: boolean) => {
+    try {
+      setActionLoading(`answer-${testId}`);
+      await api(`tests?testId=${encodeURIComponent(testId)}`, 'PATCH', {
+        showAnswerKey: !currentShowAnswerKey,
+      });
+      const testsData = await api('tests');
+      onTestsUpdate(testsData);
+    } catch (err: any) {
+      setError(err.message || 'Failed to update answer key visibility');
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -271,7 +360,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            My Tests ({pendingApproval.length})
+            Review & Tests ({pendingTeacherReview.length + pendingApproval.length})
           </button>
         </div>
 
@@ -410,6 +499,65 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                       </select>
                     </div>
 
+                    {draftTest.testType === 'mock' && (
+                      <>
+                        <div>
+                          <label className="block font-medium mb-2">Mock Stream</label>
+                          <select
+                            value={draftTest.stream || 'PCM'}
+                            onChange={(e) => setDraftTest({ ...draftTest, stream: e.target.value as 'PCM' | 'PCB' })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="PCM">PCM (Maths in Phase 2)</option>
+                            <option value="PCB">PCB (Biology in Phase 2)</option>
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block font-medium mb-2">Phase 1 (Physics + Chemistry) minutes</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="600"
+                              value={draftTest.sectionTimings.physicsChemistry}
+                              onChange={(e) =>
+                                setDraftTest({
+                                  ...draftTest,
+                                  sectionTimings: {
+                                    ...draftTest.sectionTimings,
+                                    physicsChemistry: Math.max(1, parseInt(e.target.value) || 90),
+                                  },
+                                })
+                              }
+                              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block font-medium mb-2">
+                              Phase 2 ({draftTest.stream === 'PCB' ? 'Biology' : 'Maths'}) minutes
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="600"
+                              value={draftTest.sectionTimings.mathsOrBiology}
+                              onChange={(e) =>
+                                setDraftTest({
+                                  ...draftTest,
+                                  sectionTimings: {
+                                    ...draftTest.sectionTimings,
+                                    mathsOrBiology: Math.max(1, parseInt(e.target.value) || 90),
+                                  },
+                                })
+                              }
+                              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                        </div>
+                      </>
+                    )}
+
                     {draftTest.testType === 'custom' && (
                       <div>
                         <label className="block font-medium mb-2">Duration (minutes)</label>
@@ -454,34 +602,139 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
         {/* Manage Tab */}
         {activeTab === 'manage' && (
           <div className="space-y-4">
-            {pendingApproval.length === 0 ? (
-              <div className="bg-white rounded-lg shadow p-6 text-center text-gray-600">
-                No tests pending approval
-              </div>
-            ) : (
-              pendingApproval.map((test) => (
-                <div key={test._id} className="bg-white rounded-lg shadow p-6 border-l-4 border-yellow-500">
-                  <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <h3 className="text-lg font-bold">{test.title}</h3>
-                      <p className="text-sm text-gray-600">Created: {new Date(test.createdAt || '').toLocaleDateString()}</p>
-                    </div>
-                    <span className="text-xs bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full font-semibold">
-                      Pending Admin Approval
-                    </span>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    {test.sections.map((section, idx) => (
-                      <div key={idx} className={`p-3 rounded-lg ${getSubjectInfo(section.subject).bgColor}`}>
-                        <p className="font-semibold">{getSubjectLabel(section.subject)}</p>
-                        <p className="text-sm">{section.questions.length} questions</p>
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-lg font-bold mb-4">Teacher Submissions for Review ({pendingTeacherReview.length})</h3>
+              {pendingTeacherReview.length === 0 ? (
+                <p className="text-gray-600">No teacher submissions pending review.</p>
+              ) : (
+                <div className="space-y-4">
+                  {pendingTeacherReview.map((test) => (
+                    <div key={test._id} className="border rounded-lg p-4">
+                      <div className="flex justify-between items-start gap-3">
+                        <div>
+                          <p className="font-semibold">{test.title}</p>
+                          <p className="text-xs text-gray-500">
+                            {test.reviewStatus === 'changes_requested' ? 'Resubmitted after feedback' : 'Submitted to coordinator'}
+                          </p>
+                          {!!test.reviewComment && (
+                            <p className="text-sm text-red-700 mt-2 bg-red-50 border border-red-200 rounded p-2">
+                              Previous comment: {test.reviewComment}
+                            </p>
+                          )}
+                        </div>
+                        <span className={`px-2 py-1 rounded text-xs font-semibold ${
+                          test.reviewStatus === 'changes_requested'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {test.reviewStatus === 'changes_requested' ? 'Changes Requested' : 'Pending Review'}
+                        </span>
                       </div>
-                    ))}
-                  </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3">
+                        {test.sections.map((section, idx) => (
+                          <div key={idx} className={`p-2 rounded ${getSubjectInfo(section.subject).bgColor}`}>
+                            <span className="font-medium">{getSubjectLabel(section.subject)}</span>
+                            <span className="text-sm text-gray-700 ml-2">{section.questions.length} questions</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <textarea
+                        value={reviewComment[test._id] || ''}
+                        onChange={(e) => setReviewComment(prev => ({ ...prev, [test._id]: e.target.value }))}
+                        placeholder="Comment for teacher (required when sending back)"
+                        className="w-full mt-3 px-3 py-2 border rounded-lg text-sm"
+                        rows={2}
+                      />
+
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          disabled={!!actionLoading}
+                          onClick={() => handleReviewSubmission(test._id, 'accept')}
+                          className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60 inline-flex items-center gap-1"
+                        >
+                          <CheckCircle size={16} /> Accept
+                        </button>
+                        <button
+                          disabled={!!actionLoading}
+                          onClick={() => handleReviewSubmission(test._id, 'return')}
+                          className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-60 inline-flex items-center gap-1"
+                        >
+                          <XCircle size={16} /> Send Back
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))
-            )}
+              )}
+            </div>
+
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-lg font-bold mb-4">Coordinator Tests</h3>
+              {myTests.length === 0 ? (
+                <p className="text-gray-600">No coordinator tests created yet.</p>
+              ) : (
+                <div className="space-y-4">
+                  {myTests.map((test) => (
+                    <div key={test._id} className="border rounded-lg p-4">
+                      <div className="flex justify-between items-start mb-3">
+                        <div>
+                          <p className="font-semibold">{test.title}</p>
+                          <p className="text-xs text-gray-500">Created: {new Date(test.createdAt || '').toLocaleDateString()}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className={`text-xs px-2 py-1 rounded font-semibold ${
+                            test.approved ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {test.approved ? 'Approved by Admin' : 'Pending Admin Approval'}
+                          </span>
+                          {test.approved && (
+                            <span className={`text-xs px-2 py-1 rounded font-semibold ${
+                              test.active ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
+                            }`}>
+                              {test.active ? 'Active' : 'Inactive'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+                        {test.sections.map((section, idx) => (
+                          <div key={idx} className={`p-2 rounded ${getSubjectInfo(section.subject).bgColor}`}>
+                            <span className="font-medium">{getSubjectLabel(section.subject)}</span>
+                            <span className="text-sm text-gray-700 ml-2">{section.questions.length} questions</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          disabled={!test.approved || !!actionLoading}
+                          onClick={() => handleToggleActive(test._id, test.active)}
+                          className={`px-4 py-2 rounded text-white disabled:opacity-60 ${
+                            test.active ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
+                          }`}
+                        >
+                          {actionLoading === `active-${test._id}` ? '...' : test.active ? 'Deactivate Access' : 'Activate Access'}
+                        </button>
+                        <button
+                          disabled={!!actionLoading}
+                          onClick={() => handleToggleAnswerKey(test._id, test.showAnswerKey)}
+                          className={`px-4 py-2 rounded border disabled:opacity-60 inline-flex items-center gap-1 ${
+                            test.showAnswerKey
+                              ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                          }`}
+                        >
+                          {actionLoading === `answer-${test._id}` ? '...' : test.showAnswerKey ? <><EyeOff size={16} /> Hide Answer Key</> : <><Eye size={16} /> Show Answer Key</>}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

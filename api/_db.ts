@@ -172,8 +172,27 @@ const testSchema = new mongoose.Schema(
       },
     ],
 
-    // Teacher controls when students can see correct answers & explanations
+    // Coordinator/Admin controls when students can see correct answers & explanations
     showAnswerKey: { type: Boolean, default: false },
+
+    // Teacher -> Coordinator -> Admin review workflow
+    reviewStatus: {
+      type: String,
+      enum: [
+        "submitted_to_coordinator",
+        "changes_requested",
+        "accepted_by_coordinator",
+        "submitted_to_admin",
+        "approved",
+      ],
+      default: "submitted_to_coordinator",
+    },
+    reviewComment: { type: String, default: "" },
+    reviewedAt: { type: Date },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
 
     approved: { type: Boolean, default: false },
     active: { type: Boolean, default: false },
