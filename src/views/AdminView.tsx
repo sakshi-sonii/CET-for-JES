@@ -67,12 +67,14 @@ const AdminView: React.FC<AdminViewProps> = ({
     email: '',
     password: '',
     name: '',
-    role: 'student' as 'student' | 'teacher' | 'admin',
+    role: 'student' as 'student' | 'teacher' | 'coordinator' | 'admin',
     course: '',
     approved: false,
   })
 
-  const pendingUsers = users.filter((u) => u && !u.approved && u.role === 'teacher')
+  const pendingUsers = users.filter((u) =>
+    u && !u.approved && (u.role === 'teacher' || u.role === 'coordinator')
+  )
   const pendingTests = tests.filter((t) => t && !t.approved)
 
   // Filter out any null/broken submissions
@@ -510,6 +512,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                   <select value={newUserForm.role} onChange={e => setNewUserForm({...newUserForm, role: e.target.value as any})} className="px-3 py-2 border rounded">
                     <option value="student">Student</option>
                     <option value="teacher">Teacher</option>
+                    <option value="coordinator">Coordinator</option>
                     <option value="admin">Admin</option>
                   </select>
                   <select value={newUserForm.course} onChange={e => setNewUserForm({...newUserForm, course: e.target.value})} className="px-3 py-2 border rounded">

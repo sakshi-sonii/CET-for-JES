@@ -93,7 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: "Name and role are required" });
       }
 
-      if (!["student", "teacher"].includes(role)) {
+      if (!["student", "teacher", "coordinator"].includes(role)) {
         return res.status(400).json({ message: "Invalid role" });
       }
 

@@ -18,7 +18,7 @@ const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, courses }) => {
     email: "",
     password: "",
     name: "",
-    role: "student" as "student" | "teacher",
+    role: "student" as "student" | "teacher" | "coordinator",
     course: "",
   });
 
@@ -187,13 +187,14 @@ const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, courses }) => {
                 onChange={(e) =>
                   setFormData({
                     ...formData,
-                    role: e.target.value as "student" | "teacher",
+                    role: e.target.value as "student" | "teacher" | "coordinator",
                   })
                 }
                 className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               >
                 <option value="student">Student</option>
                 <option value="teacher">Teacher</option>
+                <option value="coordinator">Coordinator</option>
               </select>
 
               {formData.role === "student" && (
