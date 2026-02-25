@@ -6,16 +6,43 @@ import {
   comparePassword,
   generateToken,
   seedAdmin,
+  getUserFromRequest,
   withRetry,
 } from "./_db.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
+  }
+
+  // Route: GET /api/auth/me
+  if (req.method === "GET" && req.url?.includes("/me")) {
+    try {
+      await connectDB();
+      const user = await getUserFromRequest(req);
+      if (!user) {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+      res.setHeader("Cache-Control", "s-maxage=30, stale-while-revalidate=60");
+      return res.status(200).json({
+        user: {
+          _id: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          approved: user.approved,
+          course: user.course,
+          stream: user.stream,
+          assignedSubjects: user.assignedSubjects || [],
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
   }
 
   if (req.method !== "POST") {

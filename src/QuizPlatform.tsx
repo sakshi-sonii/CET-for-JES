@@ -5,6 +5,7 @@ import LoginView from './views/LoginView';
 import AdminView from './views/AdminView';
 import TeacherView from './views/TeacherView';
 import StudentView from './views/StudentView';
+import CoordinatorView from './views/CoordinatorView';
 import TakingTestView from './views/TakingTestView';
 
 const getSubjectLabel = (subject: string): string => {
@@ -323,6 +324,16 @@ const QuizPlatform: React.FC = () => {
           onTabChange={setStudentActiveTab}
           onStartTest={startTest}
           onLogout={logout}
+        />
+      )}
+
+      {user && view === 'coordinator' && (
+        <CoordinatorView
+          user={user}
+          tests={tests}
+          courses={courses}
+          onLogout={logout}
+          onTestsUpdate={handleTestsUpdate}
         />
       )}
 

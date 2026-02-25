@@ -129,10 +129,15 @@ const testSchema = new mongoose.Schema(
       ref: "Course",
       required: true,
     },
+    // Created by teacher (when uploading questions for their subject)
     teacherId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+    },
+    // Created by coordinator (when combining questions from multiple subjects)
+    coordinatorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
 
     // 'mock' = PCM/PCB two-phase, 'custom' = single timer any subjects
@@ -178,6 +183,7 @@ const testSchema = new mongoose.Schema(
 
 testSchema.index({ course: 1, approved: 1, active: 1 });
 testSchema.index({ teacherId: 1 });
+testSchema.index({ coordinatorId: 1 });
 
 const questionResultSchema = new mongoose.Schema(
   {
@@ -253,22 +259,47 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   role: {
     type: String,
-    enum: ["admin", "teacher", "student"],
+    enum: ["admin", "teacher", "student", "coordinator"],
     required: true,
   },
   approved: { type: Boolean, default: false },
   course: { type: mongoose.Schema.Types.ObjectId, ref: "Course" },
   stream: { type: String, enum: ["PCM", "PCB"] },
+  // For teachers: which subjects they teach in their course
+  assignedSubjects: [{ type: mongoose.Schema.Types.ObjectId, ref: "Subject" }],
   createdAt: { type: Date, default: Date.now },
 });
 
 userSchema.index({ role: 1, approved: 1 });
 userSchema.index({ course: 1 });
 
+const subjectSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    enum: ["physics", "chemistry", "maths", "biology"],
+  },
+  course: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Course",
+    required: true,
+  },
+  teacherId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+  },
+  createdAt: { type: Date, default: Date.now },
+});
+
+subjectSchema.index({ course: 1 });
+subjectSchema.index({ teacherId: 1 });
+
 const courseSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true, trim: true },
   description: { type: String, default: "" },
   stream: { type: String, enum: ["PCM", "PCB"] },
+  // Array of subject IDs
+  subjects: [{ type: mongoose.Schema.Types.ObjectId, ref: "Subject" }],
   createdAt: { type: Date, default: Date.now },
 });
 
@@ -303,6 +334,8 @@ export const User = (mongoose.models.User ||
   mongoose.model("User", userSchema)) as mongoose.Model<any>;
 export const Course = (mongoose.models.Course ||
   mongoose.model("Course", courseSchema)) as mongoose.Model<any>;
+export const Subject = (mongoose.models.Subject ||
+  mongoose.model("Subject", subjectSchema)) as mongoose.Model<any>;
 export const Test = (mongoose.models.Test ||
   mongoose.model("Test", testSchema)) as mongoose.Model<any>;
 export const TestSubmission = (mongoose.models.TestSubmission ||

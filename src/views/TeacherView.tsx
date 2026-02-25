@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   BookOpen, LogOut, Upload, ImageIcon, FileText, Trash2, Download, Plus,
-  Eye, EyeOff, Clock, Settings, Save, Edit3, X, RefreshCw, CheckCircle, Pencil
+  Eye, EyeOff, Clock, Settings, Save, Edit3, X, RefreshCw, CheckCircle, Pencil, AlertCircle
 } from 'lucide-react';
-import type { User, Test, Course, Material, Question, TestType, CourseStream } from '../types';
+import type { User, Test, Course, Material, Question, TestType, CourseStream, Subject } from '../types';
 import { api } from '../api';
 
 interface TeacherViewProps {
@@ -180,6 +180,8 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   // ========================
   // LOAD DRAFTS FROM LOCALSTORAGE
   // ========================
+  const [subjects, setSubjects] = useState<Subject[]>([])
+
   useEffect(() => {
     try {
       const stored = localStorage.getItem(`${DRAFTS_STORAGE_KEY}_${user._id}`);
@@ -192,6 +194,17 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     } catch (e) {
       console.error('Failed to load drafts:', e);
     }
+    
+    // Fetch subjects
+    const fetchSubjects = async () => {
+      try {
+        const data = await api('subjects')
+        setSubjects(data || [])
+      } catch (error) {
+        console.error('Failed to fetch subjects:', error)
+      }
+    }
+    fetchSubjects()
   }, [user._id]);
 
   // ========================
@@ -437,6 +450,19 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   // ========================
   // Subject selection
   // ========================
+  const getAssignedSubjects = (): SubjectKey[] => {
+    const assignedSubjectNames = subjects
+      .filter(s => {
+        const teacherId = typeof s.teacherId === 'string' ? s.teacherId : (s.teacherId as any)?._id;
+        return teacherId === user._id;
+      })
+      .map(s => s.name as SubjectKey)
+    return assignedSubjectNames;
+  };
+
+  const assignedSubjectKeys = getAssignedSubjects();
+  const hasAssignedSubjects = assignedSubjectKeys.length > 0;
+
   const toggleSubject = (subject: SubjectKey) => {
     setSelectedSubjects(prev => {
       let newSelected: SubjectKey[];
@@ -2250,44 +2276,59 @@ const TeacherView: React.FC<TeacherViewProps> = ({
               <h3 className="font-semibold text-indigo-800 mb-3">
                 📚 Select Subjects
               </h3>
-              <p className="text-sm text-indigo-600 mb-3">
-                Choose one or more subjects. Use presets for quick PCM/PCB mock tests,
-                or pick any combination for a custom timed test.
-                <br />
-                <span className="text-xs">
-                  Maths (2 marks/Q) and Biology (1 mark/Q) are optional
-                  alternatives.
-                </span>
-              </p>
+              
+              {!hasAssignedSubjects ? (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2 mb-3">
+                  <AlertCircle className="w-5 h-5 text-yellow-700 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium text-yellow-800">No subjects assigned</p>
+                    <p className="text-xs text-yellow-700">Contact your administrator to assign subjects for you to teach.</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="text-sm text-indigo-600 mb-3">
+                    Choose one or more of your assigned subjects to create a test.
+                    <br />
+                    <span className="text-xs">
+                      Maths (2 marks/Q) and other subjects (1 mark/Q)
+                    </span>
+                  </p>
 
-              {/* Quick presets */}
-              <div className="flex flex-wrap gap-2 mb-3">
-                <span className="text-xs font-medium text-gray-500 self-center mr-1">
-                  Presets:
-                </span>
-                <button
-                  onClick={() => applyPreset('pcm')}
-                  className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition"
-                >
-                  PCM (Phy + Chem + Maths)
-                </button>
-                <button
-                  onClick={() => applyPreset('pcb')}
-                  className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition"
-                >
-                  PCB (Phy + Chem + Bio)
-                </button>
-                <button
-                  onClick={() => applyPreset('pcmb')}
-                  className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition"
-                >
-                  All 4 Subjects
-                </button>
-              </div>
+                  {/* Quick presets */}
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <span className="text-xs font-medium text-gray-500 self-center mr-1">
+                      Presets:
+                    </span>
+                    <button
+                      disabled={!assignedSubjectKeys.includes('physics') || !assignedSubjectKeys.includes('chemistry') || !assignedSubjectKeys.includes('maths')}
+                      onClick={() => applyPreset('pcm')}
+                      className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      PCM (Phy + Chem + Maths)
+                    </button>
+                    <button
+                      disabled={!assignedSubjectKeys.includes('physics') || !assignedSubjectKeys.includes('chemistry') || !assignedSubjectKeys.includes('biology')}
+                      onClick={() => applyPreset('pcb')}
+                      className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      PCB (Phy + Chem + Bio)
+                    </button>
+                    <button
+                      disabled={assignedSubjectKeys.length < 4}
+                      onClick={() => applyPreset('pcmb')}
+                      className="px-3 py-1 text-xs bg-white border rounded-full hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      All 4 Subjects
+                    </button>
+                  </div>
+                </>
+              )}
 
               {/* Subject toggles */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {ALL_SUBJECTS.map(sub => {
+                  const isAssigned = assignedSubjectKeys.includes(sub.key);
                   const isSelected = selectedSubjects.includes(sub.key);
                   const qCount =
                     sections.find(s => s.subject === sub.key)
@@ -2295,9 +2336,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   return (
                     <button
                       key={sub.key}
+                      disabled={!isAssigned}
                       onClick={() => toggleSubject(sub.key)}
                       className={`p-3 rounded-lg border-2 text-left transition ${
-                        isSelected
+                        !isAssigned
+                          ? 'bg-gray-100 border-gray-200 opacity-50 cursor-not-allowed'
+                          : isSelected
                           ? `${sub.color} border-current ring-2 ring-offset-1`
                           : 'bg-white border-gray-200 hover:border-gray-300'
                       }`}
@@ -2323,6 +2367,9 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                           </span>
                         )}
                       </div>
+                      {!isAssigned && (
+                        <p className="text-xs text-gray-400 mt-1">Not assigned</p>
+                      )}
                     </button>
                   );
                 })}
@@ -2342,8 +2389,9 @@ const TeacherView: React.FC<TeacherViewProps> = ({
               )}
             </div>
 
-            {/* ======================== TEST TYPE & TIMING CONFIG ======================== */}
-            {selectedSubjects.length > 0 && (
+            {hasAssignedSubjects && selectedSubjects.length > 0 && (
+              <>
+              {/* ======================== TEST TYPE & TIMING CONFIG ======================== */}
               <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
                 <h3 className="font-semibold text-amber-800 mb-3 flex items-center gap-2">
                   <Settings className="w-5 h-5" />
@@ -2550,6 +2598,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   </div>
                 </div>
               </div>
+              </>
             )}
 
             {/* Bulk import */}

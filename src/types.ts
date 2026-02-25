@@ -36,7 +36,8 @@ export interface Test {
   _id: string;
   title: string;
   course: string;
-  teacherId: string | { _id: string; name?: string };
+  teacherId?: string | { _id: string; name?: string };
+  coordinatorId?: string | { _id: string; name?: string };
 
   testType: TestType;
 
@@ -167,6 +168,19 @@ export interface TestSubmission {
 }
 
 // ========================
+// Subject
+// ========================
+
+export interface Subject {
+  _id: string;
+  name: SubjectKey;
+  course: string;
+  teacherId?: string | User;
+  label: string;
+  createdAt?: string;
+}
+
+// ========================
 // User, Course, Material
 // ========================
 
@@ -174,16 +188,19 @@ export interface User {
   _id: string;
   name: string;
   email: string;
-  role: 'student' | 'teacher' | 'admin';
+  role: 'student' | 'teacher' | 'admin' | 'coordinator';
   course?: string;
   stream?: CourseStream;
   approved?: boolean;
+  // For teachers: which subjects they teach (subject IDs)
+  assignedSubjects?: string[];
 }
 
 export interface Course {
   _id: string;
   name: string;
   stream?: CourseStream;
+  subjects?: Subject[] | string[];
 }
 
 export interface Material {

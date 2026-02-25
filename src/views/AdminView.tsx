@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Award, LogOut, Eye, EyeOff, Clock} from 'lucide-react'
-import type { User, Test, Course, TestSubmission, SubjectKey } from '../types'
+import type { User, Test, Course, TestSubmission, SubjectKey, Subject } from '../types'
 import { api } from '../api'
 
 interface AdminViewProps {
@@ -46,6 +46,23 @@ const AdminView: React.FC<AdminViewProps> = ({
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [expandedTest, setExpandedTest] = useState<string | null>(null)
   const [rankingsTestFilter, setRankingsTestFilter] = useState<string>('all')
+  const [subjects, setSubjects] = useState<Subject[]>([])
+  const [subjectForm, setSubjectForm] = useState({ courseId: '', subjectKey: '' as SubjectKey })
+  const [assignTeacherForm, setAssignTeacherForm] = useState({ subjectId: '', teacherId: '' })
+
+  // Fetch subjects on mount
+  useEffect(() => {
+    const fetchSubjects = async () => {
+      try {
+        const data = await api('subjects')
+        setSubjects(data || [])
+      } catch (error) {
+        console.error('Failed to fetch subjects:', error)
+      }
+    }
+    fetchSubjects()
+  }, [])
+
   const [newUserForm, setNewUserForm] = useState({
     email: '',
     password: '',
@@ -246,6 +263,55 @@ const AdminView: React.FC<AdminViewProps> = ({
     }
   }
 
+  const createSubject = async (courseId: string, subjectKey: SubjectKey) => {
+    if (!courseId || !subjectKey) {
+      alert('Please select a course and subject')
+      return
+    }
+    try {
+      setActionLoading('create-subject')
+      await api('subjects', 'POST', { courseId, name: subjectKey, label: getSubjectLabel(subjectKey) })
+      const subjectsData = await api('subjects')
+      setSubjects(subjectsData || [])
+      setSubjectForm({ courseId: '', subjectKey: '' as SubjectKey })
+      alert('Subject created')
+    } catch (error: any) {
+      alert(error.message || 'Failed to create subject')
+    }
+    setActionLoading(null)
+  }
+
+  const assignTeacherToSubject = async (subjectId: string, teacherId: string) => {
+    if (!subjectId || !teacherId) {
+      alert('Please select a subject and teacher')
+      return
+    }
+    try {
+      setActionLoading(`assign-${subjectId}`)
+      await api('subjects', 'PUT', { subjectId, teacherId })
+      const subjectsData = await api('subjects')
+      setSubjects(subjectsData || [])
+      setAssignTeacherForm({ subjectId: '', teacherId: '' })
+      alert('Teacher assigned')
+    } catch (error: any) {
+      alert(error.message || 'Failed to assign teacher')
+    }
+    setActionLoading(null)
+  }
+
+  const deleteSubject = async (subjectId: string) => {
+    if (!confirm('Delete this subject?')) return
+    try {
+      setActionLoading(`delete-${subjectId}`)
+      await api(`subjects/${subjectId}`, 'DELETE')
+      const subjectsData = await api('subjects')
+      setSubjects(subjectsData || [])
+    } catch (error: any) {
+      alert(error.message || 'Failed to delete subject')
+    }
+    setActionLoading(null)
+  }
+
   const getSectionBadgeColor = (subject: string) => {
     return getSubjectInfo(subject).badge
   }
@@ -376,7 +442,7 @@ const AdminView: React.FC<AdminViewProps> = ({
 
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="flex gap-4 mb-6 overflow-x-auto">
-          {['users', 'tests', 'courses', 'rankings', 'analytics'].map((tab) => (
+          {['users', 'tests', 'courses', 'subjects', 'rankings', 'analytics'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -696,6 +762,90 @@ const AdminView: React.FC<AdminViewProps> = ({
                   <span className="text-sm text-gray-500">{tests.filter((t) => t && t.course === c._id).length} tests</span>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* ======================== SUBJECTS TAB ======================== */}
+        {activeTab === 'subjects' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-bold mb-4">Create Subject</h2>
+              <div className="mb-4 p-4 border rounded-lg bg-gray-50">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <select value={subjectForm.courseId} onChange={e => setSubjectForm({...subjectForm, courseId: e.target.value})} className="px-3 py-2 border rounded">
+                    <option value="">Select Course</option>
+                    {courses.map(c => c && <option key={c._id} value={c._id}>{c.name}</option>)}
+                  </select>
+                  <select value={subjectForm.subjectKey} onChange={e => setSubjectForm({...subjectForm, subjectKey: e.target.value as SubjectKey})} className="px-3 py-2 border rounded">
+                    <option value="" disabled>Select Subject</option>
+                    {ALL_SUBJECTS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                  </select>
+                  <button 
+                    disabled={actionLoading === 'create-subject' || !subjectForm.subjectKey}
+                    onClick={() => createSubject(subjectForm.courseId, subjectForm.subjectKey)}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {actionLoading === 'create-subject' ? '...' : 'Create Subject'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-bold mb-4">Assign Teachers to Subjects</h2>
+              <div className="mb-6 p-4 border rounded-lg bg-gray-50">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <select value={assignTeacherForm.subjectId} onChange={e => setAssignTeacherForm({...assignTeacherForm, subjectId: e.target.value})} className="px-3 py-2 border rounded">
+                    <option value="">Select Subject</option>
+                    {subjects.map(s => s && <option key={s._id} value={s._id}>
+                      {s.label && courses.find(c => c._id === s.course)?.name} - {s.label}
+                    </option>)}
+                  </select>
+                  <select value={assignTeacherForm.teacherId} onChange={e => setAssignTeacherForm({...assignTeacherForm, teacherId: e.target.value})} className="px-3 py-2 border rounded">
+                    <option value="">Select Teacher</option>
+                    {users.filter(u => u?.role === 'teacher' && u?.approved).map(u => <option key={u._id} value={u._id}>{u.name}</option>)}
+                  </select>
+                  <button 
+                    disabled={actionLoading?.startsWith('assign-') || !assignTeacherForm.subjectId || !assignTeacherForm.teacherId}
+                    onClick={() => assignTeacherToSubject(assignTeacherForm.subjectId, assignTeacherForm.teacherId)}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {actionLoading?.startsWith('assign-') ? '...' : 'Assign Teacher'}
+                  </button>
+                </div>
+              </div>
+
+              <h3 className="text-lg font-bold mb-4">Subject-Teacher Assignments</h3>
+              <div className="space-y-3">
+                {subjects.map(s => s && (
+                  <div key={s._id} className="p-4 border rounded-lg flex justify-between items-center">
+                    <div className="flex-1">
+                      <p className="font-medium">{s.label}</p>
+                      <p className="text-sm text-gray-600">
+                        Course: {courses.find(c => c._id === s.course)?.name}
+                      </p>
+                      {s.teacherId ? (
+                        <p className="text-sm text-indigo-600 font-semibold">
+                          Teacher: {typeof s.teacherId === 'string' 
+                            ? users.find(u => u._id === s.teacherId)?.name || 'Unknown'
+                            : (s.teacherId as any).name || 'Unknown'
+                          }
+                        </p>
+                      ) : (
+                        <p className="text-sm text-red-500">No teacher assigned</p>
+                      )}
+                    </div>
+                    <button 
+                      disabled={actionLoading?.startsWith('delete-')}
+                      onClick={() => deleteSubject(s._id)}
+                      className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60"
+                    >
+                      {actionLoading === `delete-${s._id}` ? '...' : 'Delete'}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}

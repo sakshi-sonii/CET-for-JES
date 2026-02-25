@@ -3,11 +3,10 @@ import { connectDB, Test, getUserFromRequest, withRetry } from "./_db.js";
 import mongoose from "mongoose";
 
 const VALID_SUBJECTS = ["physics", "chemistry", "maths", "biology"];
-const PHASE1_SUBJECTS = ["physics", "chemistry"];
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") {
@@ -22,10 +21,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
+    // Extract ID and action from URL (e.g., /api/tests/123 or /api/tests/123/approve)
+    const urlParts = req.url?.split('/').filter(Boolean) || [];
+    const testId = urlParts.length > 2 ? urlParts[2] : null;
+    const action = urlParts.length > 3 ? urlParts[3] : null;
+
     // ========================
-    // GET /api/tests
+    // GET /api/tests or /api/tests/:id
     // ========================
     if (req.method === "GET") {
+      res.setHeader("Cache-Control", "s-maxage=10, stale-while-revalidate=30");
+
+      // GET specific test by ID
+      if (testId && testId.match(/^[0-9a-fA-F]{24}$/)) {
+        let query: any = { _id: testId };
+
+        if (currentUser.role === "student") {
+          query.approved = true;
+          query.active = true;
+          query.course = currentUser.course;
+        } else if (currentUser.role === "teacher") {
+          query.teacherId = currentUser._id;
+        } else if (currentUser.role === "coordinator") {
+          // Coordinators can view all tests they created or pending approval
+          query = {
+            _id: testId,
+            $or: [
+              { coordinatorId: currentUser._id },
+              { approved: false }
+            ]
+          };
+        }
+        // Admin sees all
+
+        const test = await withRetry(() =>
+          Test.findOne(query).lean()
+        );
+
+        if (!test) {
+          if (currentUser.role !== "admin") {
+            const exists = await Test.exists({ _id: testId });
+            if (exists) {
+              return res.status(403).json({ message: "Access denied" });
+            }
+          }
+          return res.status(404).json({ message: "Test not found" });
+        }
+
+        return res.status(200).json(test);
+      }
+
+      // GET all tests (list)
       let query: any = {};
 
       if (currentUser.role === "student") {
@@ -37,6 +83,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } else if (currentUser.role === "teacher") {
         query = {
           teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
+        };
+      } else if (currentUser.role === "coordinator") {
+        // Coordinators see all unapproved tests (both from teachers and other coordinators)
+        // plus any tests they created
+        query = {
+          $or: [
+            { approved: false },
+            { coordinatorId: new mongoose.Types.ObjectId(currentUser._id.toString()) }
+          ]
         };
       }
       // Admin sees all
@@ -52,8 +107,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // POST /api/tests
     // ========================
     if (req.method === "POST") {
-      if (currentUser.role !== "teacher") {
-        return res.status(403).json({ message: "Only teachers can create tests" });
+      if (!["teacher", "coordinator"].includes(currentUser.role)) {
+        return res.status(403).json({ message: "Only teachers and coordinators can create tests" });
       }
 
       if (!currentUser.approved) {
@@ -84,6 +139,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       if (!["mock", "custom"].includes(testType)) {
         return res.status(400).json({ message: "testType must be 'mock' or 'custom'" });
+      }
+
+      // ---- Teacher constraint: can only upload for assigned subjects ----
+      if (currentUser.role === "teacher") {
+        const assignedSubjects = currentUser.assignedSubjects || [];
+        for (const section of sections) {
+          const subject = section.subject?.toLowerCase();
+          if (!subject) {
+            return res.status(400).json({ message: "Section must have a subject" });
+          }
+        }
       }
 
       // ---- Validate sections ----
@@ -228,10 +294,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         testType,
         sections: processedSections,
         showAnswerKey: !!showAnswerKey,
-        teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
         approved: false,
         active: false,
       };
+
+      // Set creator based on role
+      if (currentUser.role === "teacher") {
+        testDoc.teacherId = new mongoose.Types.ObjectId(currentUser._id.toString());
+      } else if (currentUser.role === "coordinator") {
+        testDoc.coordinatorId = new mongoose.Types.ObjectId(currentUser._id.toString());
+      }
 
       if (testType === "mock") {
         testDoc.stream = resolvedStream;
@@ -249,9 +321,277 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(201).json(test);
     }
 
+    // ========================
+    // PATCH /api/tests/:id or /api/tests/:id/approve
+    // ========================
+    if (req.method === "PATCH") {
+      if (!testId || !testId.match(/^[0-9a-fA-F]{24}$/)) {
+        return res.status(400).json({ message: "Invalid test ID" });
+      }
+
+      // Handle /approve endpoint
+      if (action === "approve") {
+        if (currentUser.role !== "admin") {
+          return res.status(403).json({ message: "Only admin can approve tests" });
+        }
+
+        const test = await withRetry(() =>
+          Test.findById(testId)
+            .select("approved testType stream sections.subject sections.questions")
+            .lean()
+        );
+
+        if (!test) {
+          return res.status(404).json({ message: "Test not found" });
+        }
+
+        if (test.approved) {
+          return res.status(400).json({ message: "Test is already approved" });
+        }
+
+        // Must have at least one section
+        if (!test.sections || test.sections.length === 0) {
+          return res.status(400).json({
+            message: "Cannot approve: test has no sections.",
+          });
+        }
+
+        // Every section must have at least one question
+        for (const section of test.sections) {
+          if (!section.questions || section.questions.length === 0) {
+            return res.status(400).json({
+              message: `Cannot approve: "${section.subject}" section has no questions.`,
+            });
+          }
+        }
+
+        // Only mock tests require specific subject combinations
+        if (test.testType === "mock") {
+          const testSubjects = test.sections.map((s: any) => s.subject);
+          const hasPhy = testSubjects.includes("physics");
+          const hasChem = testSubjects.includes("chemistry");
+          const hasMaths = testSubjects.includes("maths");
+          const hasBio = testSubjects.includes("biology");
+
+          if (!hasPhy) {
+            return res.status(400).json({
+              message: 'Cannot approve mock test: missing "physics" section.',
+            });
+          }
+          if (!hasChem) {
+            return res.status(400).json({
+              message: 'Cannot approve mock test: missing "chemistry" section.',
+            });
+          }
+          if (!hasMaths && !hasBio) {
+            return res.status(400).json({
+              message: 'Cannot approve mock test: needs either "maths" or "biology" section.',
+            });
+          }
+        }
+
+        const updated = await withRetry(() =>
+          Test.findByIdAndUpdate(
+            testId,
+            { approved: true },
+            { new: true }
+          ).lean()
+        );
+
+        return res.status(200).json(updated);
+      }
+
+      // Handle regular PATCH
+      const {
+        active,
+        title,
+        sections,
+        sectionTimings,
+        showAnswerKey,
+        testType,
+        stream,
+        customDuration,
+        customSubjects,
+      } = req.body;
+
+      const update: any = {};
+
+      if (currentUser.role === "teacher" || currentUser.role === "coordinator") {
+        const query: any = { _id: testId };
+        if (currentUser.role === "teacher") {
+          query.teacherId = currentUser._id;
+        } else if (currentUser.role === "coordinator") {
+          query.coordinatorId = currentUser._id;
+        }
+
+        const test = await withRetry(() =>
+          Test.findOne(query)
+            .select("approved")
+            .lean()
+        );
+
+        if (!test) {
+          const exists = await Test.exists({ _id: testId });
+          if (!exists) return res.status(404).json({ message: "Test not found" });
+          return res.status(403).json({ message: "Access denied" });
+        }
+
+        // Can always toggle these
+        if (active !== undefined && test.approved) {
+          update.active = !!active;
+        }
+
+        if (showAnswerKey !== undefined) {
+          update.showAnswerKey = !!showAnswerKey;
+        }
+
+        // Can update content only if NOT approved
+        if (!test.approved) {
+          if (title?.trim()) update.title = title.trim();
+          if (testType && ["mock", "custom"].includes(testType)) {
+            update.testType = testType;
+          }
+          if (stream && ["PCM", "PCB"].includes(stream)) {
+            update.stream = stream;
+          }
+          if (sections && Array.isArray(sections) && sections.length > 0) {
+            update.sections = buildProcessedSections(sections);
+          }
+          if (sectionTimings) {
+            update.sectionTimings = {
+              physicsChemistry: sectionTimings.physicsChemistry ?? 90,
+              mathsOrBiology: sectionTimings.mathsOrBiology ?? 90,
+            };
+          }
+          if (customDuration !== undefined) {
+            const dur = Number(customDuration);
+            if (dur >= 1 && dur <= 600) {
+              update.customDuration = dur;
+            }
+          }
+          if (customSubjects && Array.isArray(customSubjects)) {
+            update.customSubjects = customSubjects.filter(
+              (s: string) => VALID_SUBJECTS.includes(s)
+            );
+          }
+        }
+      } else {
+        // Admin can update everything
+        if (active !== undefined) update.active = !!active;
+        if (showAnswerKey !== undefined) {
+          update.showAnswerKey = !!showAnswerKey;
+        }
+        if (title?.trim()) update.title = title.trim();
+        if (testType && ["mock", "custom"].includes(testType)) {
+          update.testType = testType;
+        }
+        if (stream && ["PCM", "PCB"].includes(stream)) {
+          update.stream = stream;
+        }
+        if (sections && Array.isArray(sections) && sections.length > 0) {
+          update.sections = buildProcessedSections(sections);
+        }
+        if (sectionTimings) {
+          update.sectionTimings = {
+            physicsChemistry: sectionTimings.physicsChemistry ?? 90,
+            mathsOrBiology: sectionTimings.mathsOrBiology ?? 90,
+          };
+        }
+        if (customDuration !== undefined) {
+          const dur = Number(customDuration);
+          if (dur >= 1 && dur <= 600) {
+            update.customDuration = dur;
+          }
+        }
+        if (customSubjects && Array.isArray(customSubjects)) {
+          update.customSubjects = customSubjects.filter(
+            (s: string) => VALID_SUBJECTS.includes(s)
+          );
+        }
+      }
+
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
+
+      const updated = await withRetry(() =>
+        Test.findByIdAndUpdate(testId, update, { new: true }).lean()
+      );
+
+      if (!updated) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      return res.status(200).json(updated);
+    }
+
+    // ========================
+    // DELETE /api/tests/:id
+    // ========================
+    if (req.method === "DELETE") {
+      if (!testId || !testId.match(/^[0-9a-fA-F]{24}$/)) {
+        return res.status(400).json({ message: "Invalid test ID" });
+      }
+
+      const query: any = { _id: testId };
+
+      if (currentUser.role === "teacher") {
+        query.teacherId = currentUser._id;
+      } else if (currentUser.role === "coordinator") {
+        query.coordinatorId = currentUser._id;
+      }
+      // Admin can delete any
+
+      const deleted = await withRetry(() =>
+        Test.findOneAndDelete(query).select("_id title").lean()
+      );
+
+      if (!deleted) {
+        const exists = await Test.exists({ _id: testId });
+        if (!exists) return res.status(404).json({ message: "Test not found" });
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      return res.status(200).json({ message: "Test deleted successfully" });
+    }
+
     return res.status(405).json({ message: "Method not allowed" });
   } catch (error: any) {
     console.error("Tests API error:", error);
     return res.status(500).json({ message: error.message || "Internal server error" });
   }
+}
+
+// ========================
+// Helper: Process sections for storage
+// ========================
+function buildProcessedSections(sections: any[]): any[] {
+  return sections
+    .filter((section: any) => {
+      const subject = section.subject?.toLowerCase();
+      return (
+        subject &&
+        VALID_SUBJECTS.includes(subject) &&
+        section.questions?.length > 0
+      );
+    })
+    .map((section: any) => {
+      const subject = section.subject.toLowerCase();
+      return {
+        subject,
+        marksPerQuestion:
+          section.marksPerQuestion || (subject === "maths" ? 2 : 1),
+        questions: section.questions.map((q: any) => ({
+          question: q.question || "",
+          questionImage: q.questionImage || "",
+          options: q.options || [],
+          optionImages: q.optionImages?.some((img: string) => img)
+            ? q.optionImages
+            : [],
+          correct: q.correct,
+          explanation: q.explanation || "",
+          explanationImage: q.explanationImage || "",
+        })),
+      };
+    });
 }
