@@ -14,6 +14,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     await connectDB();
 
+    // Extract path params from URLs like /api/subjects/:id or /api/subjects/questions
+    const urlParts = req.url?.split('/').filter(Boolean) || [];
+    const pathParam = urlParts.length > 2 ? urlParts[2] : null;
+
     // Check for /questions endpoint
     const isQuestionsPath = req.url?.includes("/questions");
 
@@ -58,17 +62,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json(tests);
       }
 
-      // GET /api/subjects?courseId=xxx
+      // GET /api/subjects?courseId=xxx (or all subjects when courseId is omitted)
       const { courseId } = req.query;
 
-      if (!courseId) {
-        return res.status(400).json({ message: "courseId is required" });
+      const query: any = {};
+      if (courseId) {
+        query.course = courseId;
       }
 
       const subjects = await withRetry(() =>
-        Subject.find({ course: courseId })
+        Subject.find(query)
           .populate("teacherId", "name email")
-          .sort({ name: 1 })
+          .sort({ course: 1, name: 1 })
           .lean()
       );
 
@@ -196,7 +201,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(403).json({ message: "Access denied" });
       }
 
-      const { subjectId } = req.query;
+      const querySubjectId = req.query.subjectId as string | undefined;
+      const pathSubjectId =
+        pathParam && /^[0-9a-fA-F]{24}$/.test(pathParam) ? pathParam : null;
+      const subjectId = querySubjectId || pathSubjectId;
 
       if (!subjectId) {
         return res.status(400).json({ message: "subjectId is required" });

@@ -785,7 +785,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                     {ALL_SUBJECTS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
                   </select>
                   <button 
-                    disabled={actionLoading === 'create-subject' || !subjectForm.subjectKey}
+                    disabled={actionLoading === 'create-subject' || !subjectForm.courseId || !subjectForm.subjectKey}
                     onClick={() => createSubject(subjectForm.courseId, subjectForm.subjectKey)}
                     className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60"
                   >
@@ -802,7 +802,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                   <select value={assignTeacherForm.subjectId} onChange={e => setAssignTeacherForm({...assignTeacherForm, subjectId: e.target.value})} className="px-3 py-2 border rounded">
                     <option value="">Select Subject</option>
                     {subjects.map(s => s && <option key={s._id} value={s._id}>
-                      {s.label && courses.find(c => c._id === s.course)?.name} - {s.label}
+                      {(courses.find(c => c._id === s.course)?.name || 'Unknown Course')} - {(s.label || getSubjectLabel(s.name))}
                     </option>)}
                   </select>
                   <select value={assignTeacherForm.teacherId} onChange={e => setAssignTeacherForm({...assignTeacherForm, teacherId: e.target.value})} className="px-3 py-2 border rounded">
@@ -824,7 +824,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                 {subjects.map(s => s && (
                   <div key={s._id} className="p-4 border rounded-lg flex justify-between items-center">
                     <div className="flex-1">
-                      <p className="font-medium">{s.label}</p>
+                      <p className="font-medium">{s.label || getSubjectLabel(s.name)}</p>
                       <p className="text-sm text-gray-600">
                         Course: {courses.find(c => c._id === s.course)?.name}
                       </p>
