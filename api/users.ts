@@ -2,6 +2,50 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { connectDB, User, Test, TestSubmission, getUserFromRequest, hashPassword, withRetry } from "./_db.js";
 import mongoose from "mongoose";
 
+const getIdString = (value: any): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    if (value._id) return String(value._id);
+    if (value.toString) return String(value.toString());
+  }
+  return String(value);
+};
+
+const getChunkRootId = (test: any): string => {
+  const parentId = getIdString(test?.parentTestId);
+  if (parentId) return parentId;
+  return getIdString(test?._id);
+};
+
+const hasChunkMeta = (test: any): boolean => {
+  return !!getIdString(test?.parentTestId) || Number(test?.chunkInfo?.total || 0) > 1;
+};
+
+const mergeSectionsFromChunks = (tests: any[]): any[] => {
+  const sectionMap = new Map<string, any>();
+  const sorted = [...tests].sort((a, b) => {
+    const aIdx = Number(a?.chunkInfo?.current ?? (a?.parentTestId ? 2 : 1));
+    const bIdx = Number(b?.chunkInfo?.current ?? (b?.parentTestId ? 2 : 1));
+    return aIdx - bIdx;
+  });
+
+  for (const test of sorted) {
+    for (const section of test?.sections || []) {
+      if (!sectionMap.has(section.subject)) {
+        sectionMap.set(section.subject, {
+          subject: section.subject,
+          marksPerQuestion: section.marksPerQuestion,
+          questions: [],
+        });
+      }
+      sectionMap.get(section.subject).questions.push(...(section.questions || []));
+    }
+  }
+
+  return Array.from(sectionMap.values());
+};
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
@@ -124,24 +168,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const studentOid = new mongoose.Types.ObjectId(currentUser._id.toString());
-      const testOid = new mongoose.Types.ObjectId(testId);
+      if (!mongoose.Types.ObjectId.isValid(String(testId))) {
+        return res.status(400).json({ message: "Invalid test ID" });
+      }
+      const requestedTestOid = new mongoose.Types.ObjectId(String(testId));
 
-      // Check duplicate + fetch test
-      const [existingSubmission, test] = await withRetry(() =>
-        Promise.all([
-          TestSubmission.findOne({ testId: testOid, studentId: studentOid })
-            .select("_id").lean(),
-          Test.findById(testOid).lean(),
-        ])
+      const requestedTest = await withRetry(() => Test.findById(requestedTestOid).lean());
+      if (!requestedTest) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      let rootTestId = getChunkRootId(requestedTest);
+      let groupTests: any[] = [requestedTest];
+      if (hasChunkMeta(requestedTest)) {
+        groupTests = await withRetry(() =>
+          Test.find({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(rootTestId) },
+              { parentTestId: new mongoose.Types.ObjectId(rootTestId) },
+            ],
+          }).lean()
+        );
+      }
+
+      if (!groupTests.length) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      if (!hasChunkMeta(requestedTest)) {
+        rootTestId = getIdString(requestedTest._id);
+      }
+
+      const submissionTestOid = new mongoose.Types.ObjectId(rootTestId);
+      const groupIdsForDuplicate = Array.from(new Set(groupTests.map((t: any) => getIdString(t._id))));
+
+      // Prevent duplicate attempts against both canonical root test ID and any legacy chunk IDs.
+      const existingSubmission = await withRetry(() =>
+        TestSubmission.findOne({
+          studentId: studentOid,
+          testId: {
+            $in: groupIdsForDuplicate.map((id) => new mongoose.Types.ObjectId(id)),
+          },
+        })
+          .select("_id")
+          .lean()
       );
 
       if (existingSubmission) {
         return res.status(400).json({ message: "You have already submitted this test" });
       }
 
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
-      }
+      const rootTest = groupTests.find((t: any) => getIdString(t._id) === rootTestId) || groupTests[0];
+      const mergedSections = mergeSectionsFromChunks(groupTests);
+      const test: any = {
+        ...rootTest,
+        _id: rootTestId,
+        sections: mergedSections,
+      };
 
       // Calculate scores
       let totalScore = 0;
@@ -220,7 +303,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const submission = await withRetry(() =>
         TestSubmission.create({
-          testId: testOid,
+          testId: submissionTestOid,
           studentId: studentOid,
           answers,
           sectionResults,

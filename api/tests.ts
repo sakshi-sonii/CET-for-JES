@@ -4,6 +4,103 @@ import mongoose from "mongoose";
 
 const VALID_SUBJECTS = ["physics", "chemistry", "maths", "biology"];
 
+const getIdString = (value: any): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    if (value._id) return String(value._id);
+    if (value.toString) return String(value.toString());
+  }
+  return String(value);
+};
+
+const getChunkRootId = (test: any): string => {
+  const parentId = getIdString(test?.parentTestId);
+  if (parentId) return parentId;
+  return getIdString(test?._id);
+};
+
+const hasChunkMeta = (test: any): boolean => {
+  return !!getIdString(test?.parentTestId) || Number(test?.chunkInfo?.total || 0) > 1;
+};
+
+const mergeSectionsFromChunks = (tests: any[]): any[] => {
+  const sectionMap = new Map<string, any>();
+  const sorted = [...tests].sort((a, b) => {
+    const aIdx = Number(a?.chunkInfo?.current ?? (a?.parentTestId ? 2 : 1));
+    const bIdx = Number(b?.chunkInfo?.current ?? (b?.parentTestId ? 2 : 1));
+    return aIdx - bIdx;
+  });
+
+  for (const test of sorted) {
+    for (const section of test?.sections || []) {
+      if (!sectionMap.has(section.subject)) {
+        sectionMap.set(section.subject, {
+          subject: section.subject,
+          marksPerQuestion: section.marksPerQuestion,
+          questions: [],
+        });
+      }
+      sectionMap.get(section.subject).questions.push(...(section.questions || []));
+    }
+  }
+
+  return Array.from(sectionMap.values());
+};
+
+const mergeChunkGroup = (group: any[]): any => {
+  const root = group.find((t) => !t?.parentTestId) || group[0];
+  const groupId = root?.parentTestId ? getIdString(root._id) : getChunkRootId(root);
+  const mergedSections = mergeSectionsFromChunks(group);
+  const subjectsIncluded = Array.from(new Set(mergedSections.map((s: any) => s.subject)));
+
+  return {
+    ...root,
+    _id: groupId,
+    parentTestId: undefined,
+    chunkInfo: undefined,
+    sections: mergedSections,
+    subjectsIncluded,
+  };
+};
+
+const aggregateChunkedTests = (tests: any[]): any[] => {
+  const groups = new Map<string, any[]>();
+  for (const test of tests) {
+    const key = getChunkRootId(test);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(test);
+  }
+
+  const merged = Array.from(groups.values()).map((group) => {
+    const isChunkedGroup = group.some((t) => hasChunkMeta(t)) || group.length > 1;
+    if (!isChunkedGroup) return group[0];
+    return mergeChunkGroup(group);
+  });
+
+  return merged.sort((a, b) => {
+    const aTime = new Date(a?.createdAt || 0).getTime();
+    const bTime = new Date(b?.createdAt || 0).getTime();
+    return bTime - aTime;
+  });
+};
+
+const getChunkGroupIds = async (testId: string): Promise<string[]> => {
+  const target = await withRetry(() => Test.findById(testId).select("_id parentTestId").lean());
+  if (!target) return [];
+
+  const rootId = getChunkRootId(target);
+  const group = await withRetry(() =>
+    Test.find({
+      $or: [{ _id: new mongoose.Types.ObjectId(rootId) }, { parentTestId: new mongoose.Types.ObjectId(rootId) }],
+    })
+      .select("_id")
+      .lean()
+  );
+
+  return group.map((t: any) => String(t._id));
+};
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
@@ -79,6 +176,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(404).json({ message: "Test not found" });
         }
 
+        if (hasChunkMeta(test)) {
+          const rootId = getChunkRootId(test);
+          const group = await withRetry(() =>
+            Test.find({
+              $or: [
+                { _id: new mongoose.Types.ObjectId(rootId) },
+                { parentTestId: new mongoose.Types.ObjectId(rootId) },
+              ],
+            }).lean()
+          );
+          if (group.length > 0) {
+            return res.status(200).json(mergeChunkGroup(group));
+          }
+        }
+
         return res.status(200).json(test);
       }
 
@@ -114,7 +226,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         Test.find(query).sort({ createdAt: -1 }).lean()
       );
 
-      return res.status(200).json(tests);
+      return res.status(200).json(aggregateChunkedTests(tests));
     }
 
     // ========================
@@ -423,7 +535,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const test = await withRetry(() =>
           Test.findById(testId)
-            .select("approved testType stream teacherId coordinatorId sections.subject sections.questions")
+            .select("_id parentTestId")
             .lean()
         );
 
@@ -431,25 +543,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(404).json({ message: "Test not found" });
         }
 
-        if (test.teacherId) {
+        const rootId = getChunkRootId(test);
+        const group = await withRetry(() =>
+          Test.find({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(rootId) },
+              { parentTestId: new mongoose.Types.ObjectId(rootId) },
+            ],
+          })
+            .select("approved testType stream teacherId coordinatorId sections.subject sections.questions")
+            .lean()
+        );
+
+        if (!group.length) {
+          return res.status(404).json({ message: "Test not found" });
+        }
+
+        const mergedTest = mergeChunkGroup(group);
+
+        if (group.some((t: any) => !!t.teacherId)) {
           return res.status(403).json({
             message: "Admin can only approve tests created by coordinators",
           });
         }
 
-        if (test.approved) {
+        if (group.every((t: any) => !!t.approved)) {
           return res.status(400).json({ message: "Test is already approved" });
         }
 
         // Must have at least one section
-        if (!test.sections || test.sections.length === 0) {
+        if (!mergedTest.sections || mergedTest.sections.length === 0) {
           return res.status(400).json({
             message: "Cannot approve: test has no sections.",
           });
         }
 
         // Every section must have at least one question
-        for (const section of test.sections) {
+        for (const section of mergedTest.sections) {
           if (!section.questions || section.questions.length === 0) {
             return res.status(400).json({
               message: `Cannot approve: "${section.subject}" section has no questions.`,
@@ -458,8 +588,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Only mock tests require specific subject combinations
-        if (test.testType === "mock") {
-          const testSubjects = test.sections.map((s: any) => s.subject);
+        if (mergedTest.testType === "mock") {
+          const testSubjects = mergedTest.sections.map((s: any) => s.subject);
           const hasPhy = testSubjects.includes("physics");
           const hasChem = testSubjects.includes("chemistry");
           const hasMaths = testSubjects.includes("maths");
@@ -482,15 +612,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
 
-        const updated = await withRetry(() =>
-          Test.findByIdAndUpdate(
-            testId,
-            { approved: true, reviewStatus: "approved", reviewedAt: new Date() },
-            { new: true }
-          ).lean()
+        const groupIds = group.map((t: any) => new mongoose.Types.ObjectId(String(t._id)));
+        await withRetry(() =>
+          Test.updateMany(
+            { _id: { $in: groupIds } },
+            { approved: true, reviewStatus: "approved", reviewedAt: new Date() }
+          )
         );
 
-        return res.status(200).json(updated);
+        return res.status(200).json({
+          ...mergedTest,
+          approved: true,
+          reviewStatus: "approved",
+          reviewedAt: new Date(),
+        });
       }
 
       // Handle coordinator review of teacher question banks
@@ -720,12 +855,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: "No valid fields to update" });
       }
 
+      const groupWideUpdate: any = {};
+      if (update.active !== undefined) groupWideUpdate.active = update.active;
+      if (update.showAnswerKey !== undefined) groupWideUpdate.showAnswerKey = update.showAnswerKey;
+
+      if (Object.keys(groupWideUpdate).length > 0) {
+        const groupIds = await getChunkGroupIds(testId);
+        if (groupIds.length > 1) {
+          await withRetry(() =>
+            Test.updateMany(
+              {
+                _id: {
+                  $in: groupIds.map((id) => new mongoose.Types.ObjectId(id)),
+                },
+              },
+              groupWideUpdate
+            )
+          );
+        }
+      }
+
       const updated = await withRetry(() =>
         Test.findByIdAndUpdate(testId, update, { new: true }).lean()
       );
 
       if (!updated) {
         return res.status(404).json({ message: "Test not found" });
+      }
+
+      if (hasChunkMeta(updated)) {
+        const rootId = getChunkRootId(updated);
+        const group = await withRetry(() =>
+          Test.find({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(rootId) },
+              { parentTestId: new mongoose.Types.ObjectId(rootId) },
+            ],
+          }).lean()
+        );
+        if (group.length > 0) {
+          return res.status(200).json(mergeChunkGroup(group));
+        }
       }
 
       return res.status(200).json(updated);
@@ -737,6 +907,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "DELETE") {
       if (!testId || !testId.match(/^[0-9a-fA-F]{24}$/)) {
         return res.status(400).json({ message: "Invalid test ID" });
+      }
+
+      const groupIds = await getChunkGroupIds(testId);
+      if (groupIds.length > 1) {
+        const permissionQuery: any =
+          currentUser.role === "admin"
+            ? { _id: { $in: groupIds.map((id) => new mongoose.Types.ObjectId(id)) } }
+            : currentUser.role === "coordinator"
+            ? {
+                _id: { $in: groupIds.map((id) => new mongoose.Types.ObjectId(id)) },
+                coordinatorId: currentUser._id,
+              }
+            : {
+                _id: { $in: groupIds.map((id) => new mongoose.Types.ObjectId(id)) },
+                teacherId: currentUser._id,
+              };
+
+        const result = await withRetry(() => Test.deleteMany(permissionQuery));
+        if (result.deletedCount && result.deletedCount > 0) {
+          return res.status(200).json({ message: "Test deleted successfully" });
+        }
       }
 
       const query: any = { _id: testId };

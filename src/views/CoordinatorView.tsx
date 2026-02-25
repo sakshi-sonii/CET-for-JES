@@ -119,8 +119,8 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
           const key = `${test.teacherId}_${section.subject}`;
           if (!bankMap.has(key)) {
             const teacherName = typeof test.teacherId === 'object' 
-              ? test.teacherId.name || 'Unknown'
-              : 'Unknown';
+              ? (test.teacherId.name || '')
+              : '';
             
             bankMap.set(key, {
               teacherId: typeof test.teacherId === 'object' ? test.teacherId._id : test.teacherId,
@@ -527,7 +527,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                             >
                               <div className="text-left">
                                 <p className="font-semibold text-gray-800">
-                                  {bank.teacherName} - {getSubjectLabel(bank.subject)}
+                                  {bank.teacherName ? `${bank.teacherName} - ` : ''}{getSubjectLabel(bank.subject)}
                                 </p>
                                 <p className="text-sm text-gray-600">{bank.testTitle}</p>
                                 <p className="text-xs text-gray-500">{bank.questions.length} questions available</p>
