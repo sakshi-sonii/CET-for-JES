@@ -194,6 +194,26 @@ const testSchema = new mongoose.Schema(
       ref: "User",
     },
 
+    // For chunked tests: ID of parent test (if this is a chunk)
+    parentTestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Test",
+    },
+
+    // For chunked tests: chunk info (e.g., "part 1 of 3")
+    chunkInfo: {
+      current: { type: Number },
+      total: { type: Number },
+    },
+
+    // Quick reference for subjects included (derived from sections)
+    subjectsIncluded: [
+      {
+        type: String,
+        enum: ["physics", "chemistry", "maths", "biology"],
+      },
+    ],
+
     approved: { type: Boolean, default: false },
     active: { type: Boolean, default: false },
   },
@@ -203,6 +223,7 @@ const testSchema = new mongoose.Schema(
 testSchema.index({ course: 1, approved: 1, active: 1 });
 testSchema.index({ teacherId: 1 });
 testSchema.index({ coordinatorId: 1 });
+testSchema.index({ parentTestId: 1 });
 
 const questionResultSchema = new mongoose.Schema(
   {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { LogOut, Save, ChevronDown, ChevronUp, CheckCircle, XCircle, Eye, EyeOff } from 'lucide-react';
-import type { User, Test, Course, TestSection, Question } from '../types';
+import type { User, Test, Course, Question } from '../types';
 import { api } from '../api';
 
 interface CoordinatorViewProps {
@@ -181,99 +181,6 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     return new Blob([JSON.stringify(payload)]).size;
   };
 
-  // Helper function to create a payload object
-  const createPayload = (sections: TestSection[], title: string): any => {
-    const payload: any = {
-      title,
-      course: selectedCourse,
-      testType: draftTest.testType,
-      sections,
-      showAnswerKey: draftTest.showAnswerKey,
-    };
-
-    if (draftTest.testType === 'mock') {
-      payload.stream = draftTest.stream;
-      payload.sectionTimings = {
-        physicsChemistry: draftTest.sectionTimings.physicsChemistry,
-        mathsOrBiology: draftTest.sectionTimings.mathsOrBiology,
-      };
-    } else {
-      payload.customDuration = draftTest.customDuration;
-    }
-
-    return payload;
-  };
-
-  // Helper function to split sections into chunks that fit the size limit
-  const splitSectionsIntoChunks = (sections: TestSection[], title: string, sizeLimit: number): TestSection[][] => {
-    const chunks: TestSection[][] = [];
-    let currentChunk: TestSection[] = [];
-    
-    // For each section, add questions incrementally to chunks
-    for (const section of sections) {
-      let sectionIndex = 0;
-      let currentSectionQuestions: Question[] = [];
-
-      while (sectionIndex < section.questions.length) {
-        const nextQuestion = section.questions[sectionIndex];
-        
-        // Try adding the next question to current section in chunk
-        const testSectionWithQuestion: TestSection = {
-          ...section,
-          questions: [...currentSectionQuestions, nextQuestion],
-        };
-
-        // Create a test chunk with current sections + updated section
-        const testPayload = createPayload(
-          [...currentChunk, testSectionWithQuestion],
-          title
-        );
-        const payloadSize = getPayloadSize(testPayload);
-
-        if (payloadSize <= sizeLimit) {
-          // Question fits, add it
-          currentSectionQuestions.push(nextQuestion);
-          sectionIndex++;
-        } else {
-          // Question doesn't fit
-          if (currentSectionQuestions.length > 0) {
-            // Save current chunk with what we have
-            currentChunk.push({
-              ...section,
-              questions: currentSectionQuestions,
-            });
-            chunks.push(currentChunk);
-            currentChunk = [];
-            currentSectionQuestions = [];
-          } else {
-            // Even a single question doesn't fit in empty chunk - add it anyway
-            // This shouldn't happen if sizeLimit is reasonable
-            currentChunk.push({
-              ...section,
-              questions: [nextQuestion],
-            });
-            sectionIndex++;
-          }
-        }
-      }
-
-      // Add remaining questions from this section to current chunk if any
-      if (currentSectionQuestions.length > 0) {
-        currentChunk.push({
-          ...section,
-          questions: currentSectionQuestions,
-        });
-      }
-    } 
-
-    // Add final chunk if it has content
-    if (currentChunk.length > 0) {
-      chunks.push(currentChunk);
-    }
-
-    return chunks;
-  };
-
   const handleSubmitTest = async () => {
     if (!draftTest.title.trim()) {
       setError('Test title is required');
@@ -308,9 +215,9 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     setError('');
 
     try {
-      // Build sections from selected questions
-      const sections: TestSection[] = [];
-      const subjectsMap = new Map<SubjectKey, Question[]>();
+      // Flatten questions with subject metadata
+      const flatQuestions: (Question & { subject: SubjectKey })[] = [];
+      const subjectsIncluded = new Set<SubjectKey>();
 
       for (const sq of draftTest.selectedQuestions) {
         const bank = teacherQuestions.find(
@@ -318,48 +225,88 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
         );
         if (!bank) continue;
 
-        const selected = sq.questionIndices.map(idx => bank.questions[idx]);
-        if (!subjectsMap.has(sq.subject)) {
-          subjectsMap.set(sq.subject, []);
+        subjectsIncluded.add(sq.subject);
+        for (const idx of sq.questionIndices) {
+          flatQuestions.push({
+            ...bank.questions[idx],
+            subject: sq.subject,
+          });
         }
-        subjectsMap.get(sq.subject)!.push(...selected);
-      }
-
-      for (const [subject, questions] of subjectsMap) {
-        sections.push({
-          subject,
-          marksPerQuestion: subject === 'maths' ? 2 : 1,
-          questions,
-        });
       }
 
       const testTitle = draftTest.title.trim();
-      const CHUNK_SIZE_LIMIT = 3.5 * 1024 * 1024; // 3.5 MB in bytes (conservative limit accounting for HTTP overhead)
+      const CHUNK_SIZE_LIMIT = 3.5 * 1024 * 1024; // 3.5 MB in bytes
 
-      // Check if payload fits within limit
-      const initialPayload = createPayload(sections, testTitle);
+      // Build payload with flat questions
+      const buildPayload = (questions: (Question & { subject: SubjectKey })[], title: string): any => {
+        const payload: any = {
+          title,
+          course: selectedCourse,
+          testType: draftTest.testType,
+          flatQuestions: questions,
+          subjectsIncluded: Array.from(subjectsIncluded),
+          showAnswerKey: draftTest.showAnswerKey,
+        };
+
+        if (draftTest.testType === 'mock') {
+          payload.stream = draftTest.stream;
+          payload.sectionTimings = {
+            physicsChemistry: draftTest.sectionTimings.physicsChemistry,
+            mathsOrBiology: draftTest.sectionTimings.mathsOrBiology,
+          };
+        } else {
+          payload.customDuration = draftTest.customDuration;
+        }
+
+        return payload;
+      };
+
+      // Check initial payload size
+      const initialPayload = buildPayload(flatQuestions, testTitle);
       const payloadSize = getPayloadSize(initialPayload);
 
       const createdTests: any[] = [];
       let parentTestId: string | null = null;
 
       if (payloadSize <= CHUNK_SIZE_LIMIT) {
-        // Payload fits within limit, send as is
+        // Payload fits, send as is
         const newTest = await api('tests', 'POST', initialPayload);
         createdTests.push(newTest);
       } else {
-        // Payload exceeds limit, split into chunks
+        // Split into chunks by questions
         setError(`Test size (${(payloadSize / 1024 / 1024).toFixed(2)} MB) exceeds limit, splitting into multiple parts...`);
         
-        const sectionChunks = splitSectionsIntoChunks(sections, testTitle, CHUNK_SIZE_LIMIT);
-        const totalChunks = sectionChunks.length;
+        const chunks: (Question & { subject: SubjectKey })[][] = [];
+        let currentChunk: (Question & { subject: SubjectKey })[] = [];
 
+        for (let qIdx = 0; qIdx < flatQuestions.length; qIdx++) {
+          const question = flatQuestions[qIdx];
+          const testChunk = [...currentChunk, question];
+          const testPayload = buildPayload(testChunk, testTitle);
+          const chunkSize = getPayloadSize(testPayload);
+
+          if (chunkSize <= CHUNK_SIZE_LIMIT) {
+            currentChunk.push(question);
+          } else {
+            // Current chunk is full, save it
+            if (currentChunk.length > 0) {
+              chunks.push(currentChunk);
+            }
+            currentChunk = [question];
+          }
+        }
+
+        // Save final chunk
+        if (currentChunk.length > 0) {
+          chunks.push(currentChunk);
+        }
+
+        const totalChunks = chunks.length;
         console.log(`Splitting test into ${totalChunks} chunks`);
 
-        for (let i = 0; i < sectionChunks.length; i++) {
-          const chunkSections = sectionChunks[i];
+        for (let i = 0; i < chunks.length; i++) {
           const chunkTitle = totalChunks > 1 ? `${testTitle} (Part ${i + 1}/${totalChunks})` : testTitle;
-          const chunkPayload = createPayload(chunkSections, chunkTitle);
+          const chunkPayload = buildPayload(chunks[i], chunkTitle);
           const chunkSize = getPayloadSize(chunkPayload);
 
           console.log(`Chunk ${i + 1}/${totalChunks} size: ${(chunkSize / 1024 / 1024).toFixed(2)} MB`);
@@ -367,18 +314,15 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
           if (chunkSize > CHUNK_SIZE_LIMIT) {
             throw new Error(
               `Chunk ${i + 1} is still too large (${(chunkSize / 1024 / 1024).toFixed(2)} MB). ` +
-              `The test has questions that are too large to split further. ` +
               `Consider reducing the number of image questions or file size of images.`
             );
           }
 
-          // Mark this as a chunk submission to skip validation on non-first chunks
+          // Mark as chunk for backend
           chunkPayload.isChunk = true;
           chunkPayload.chunkIndex = i;
           chunkPayload.totalChunks = totalChunks;
 
-          // On first chunk, don't set parentTestId (this will be the parent)
-          // On subsequent chunks, set parentTestId to first chunk's ID
           if (i > 0 && parentTestId) {
             chunkPayload.parentTestId = parentTestId;
           }
@@ -386,22 +330,18 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
           const newTest = await api('tests', 'POST', chunkPayload);
           createdTests.push(newTest);
 
-          // For first chunk, set it as parent for subsequent chunks
           if (i === 0 && totalChunks > 1) {
             parentTestId = newTest._id;
-            // Update first chunk to know its total chunks
             await api(`tests?testId=${encodeURIComponent(newTest._id)}`, 'PATCH', {
               chunkInfo: { current: 1, total: totalChunks },
             });
           } else if (i > 0 && parentTestId) {
-            // Update chunk info for non-first chunks
             await api(`tests?testId=${encodeURIComponent(newTest._id)}`, 'PATCH', {
               chunkInfo: { current: i + 1, total: totalChunks },
             });
           }
 
-          // Small delay between requests to avoid overwhelming the server
-          if (i < sectionChunks.length - 1) {
+          if (i < chunks.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 500));
           }
         }

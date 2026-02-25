@@ -135,13 +135,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         testType = "custom",
         stream,
         sections,
+        flatQuestions,
+        subjectsIncluded,
         sectionTimings,
         customDuration,
         customSubjects,
         showAnswerKey = false,
+        isChunk = false,
+        chunkIndex = 0,
+        totalChunks = 1,
       } = req.body;
       const isTeacherSubmission = currentUser.role === "teacher";
       const effectiveTestType = isTeacherSubmission ? "custom" : testType;
+
+      // Convert flatQuestions to sections if provided
+      let processedSections = sections;
+      if (flatQuestions && !sections) {
+        const sectionsMap = new Map<string, any>();
+        for (const q of flatQuestions) {
+          const subject = q.subject || 'unknown';
+          if (!sectionsMap.has(subject)) {
+            sectionsMap.set(subject, {
+              subject,
+              marksPerQuestion: q.marksPerQuestion || (subject === 'maths' ? 2 : 1),
+              questions: [],
+            });
+          }
+          const { subject: _, marksPerQuestion: __, ...questionWithoutSubject } = q;
+          sectionsMap.get(subject).questions.push(questionWithoutSubject);
+        }
+        processedSections = Array.from(sectionsMap.values());
+      }
 
       // ---- Basic validation ----
       if (!title?.trim()) {
@@ -150,7 +174,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!course) {
         return res.status(400).json({ message: "Course is required" });
       }
-      if (!sections || !Array.isArray(sections) || sections.length === 0) {
+      if (!processedSections || !Array.isArray(processedSections) || processedSections.length === 0) {
         return res.status(400).json({ message: "At least one section is required" });
       }
       if (!["mock", "custom"].includes(effectiveTestType)) {
@@ -160,7 +184,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // ---- Teacher constraint: can only upload for assigned subjects ----
       if (currentUser.role === "teacher") {
         const assignedSubjects = currentUser.assignedSubjects || [];
-        for (const section of sections) {
+        for (const section of processedSections) {
           const subject = section.subject?.toLowerCase();
           if (!subject) {
             return res.status(400).json({ message: "Section must have a subject" });
@@ -171,7 +195,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // ---- Validate sections ----
       const providedSubjects: string[] = [];
 
-      for (const section of sections) {
+      for (const section of processedSections) {
         const subject = section.subject?.toLowerCase();
 
         if (!subject || !VALID_SUBJECTS.includes(subject)) {
@@ -238,8 +262,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ---- Mock test validation ----
-      // Skip mock test validation for non-first chunks in multi-chunk submissions
-      const isNonFirstChunk = req.body.isChunk && req.body.chunkIndex > 0;
+      // Skip mock test validation for non-first chunks (don't validate section requirements)
+      const isNonFirstChunk = isChunk && chunkIndex > 0;
       
       if (effectiveTestType === "mock" && !isNonFirstChunk) {
         // Must have physics and chemistry
@@ -312,6 +336,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         course,
         testType: effectiveTestType,
         sections: processedSections,
+        subjectsIncluded: providedSubjects,
         // Coordinator/Admin control this; teacher submissions always start hidden.
         showAnswerKey: false,
         approved: false,

@@ -9,6 +9,7 @@ export type SubjectKey = 'physics' | 'chemistry' | 'maths' | 'biology';
 export type CourseStream = 'PCM' | 'PCB';
 
 export interface Question {
+  subject?: SubjectKey; // Added to support flat question format with subject metadata
   question: string;
   questionImage?: string;
   options: string[];
@@ -68,6 +69,9 @@ export interface Test {
 
   // Which subjects are included in a custom test
   customSubjects?: SubjectKey[];
+
+  // Quick reference for subjects included in the test
+  subjectsIncluded?: SubjectKey[];
 
   // --- Answer key visibility control ---
   // When false, students only see score after submission
