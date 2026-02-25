@@ -157,7 +157,6 @@ const StudentView: React.FC<StudentViewProps> = ({
 
   // Helper to combine sections from multiple tests (chunks)
   const getCombinedSections = (testGroup: Test[]): any[] => {
-    const combinedSections: any[] = [];
     const sectionMap = new Map<string, any>();
 
     for (const test of testGroup) {
