@@ -144,6 +144,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isChunk = false,
         chunkIndex = 0,
         totalChunks = 1,
+        parentTestId,
+        chunkInfo,
       } = req.body;
       const isTeacherSubmission = currentUser.role === "teacher";
       const effectiveTestType = isTeacherSubmission ? "custom" : testType;
@@ -345,6 +347,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         active: false,
       };
 
+      // Persist chunk metadata for split uploads.
+      if (isChunk) {
+        const currentChunk =
+          chunkInfo?.current !== undefined
+            ? Number(chunkInfo.current)
+            : Number(chunkIndex) + 1;
+        const totalChunkCount =
+          chunkInfo?.total !== undefined
+            ? Number(chunkInfo.total)
+            : Number(totalChunks);
+
+        if (
+          Number.isFinite(currentChunk) &&
+          Number.isFinite(totalChunkCount) &&
+          currentChunk >= 1 &&
+          totalChunkCount >= 1 &&
+          currentChunk <= totalChunkCount
+        ) {
+          testDoc.chunkInfo = {
+            current: Math.floor(currentChunk),
+            total: Math.floor(totalChunkCount),
+          };
+        }
+
+        if (parentTestId && mongoose.Types.ObjectId.isValid(String(parentTestId))) {
+          testDoc.parentTestId = new mongoose.Types.ObjectId(String(parentTestId));
+        }
+      }
+
       // Set creator based on role
       if (currentUser.role === "teacher") {
         testDoc.teacherId = new mongoose.Types.ObjectId(currentUser._id.toString());
@@ -522,6 +553,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         stream,
         customDuration,
         customSubjects,
+        chunkInfo,
+        parentTestId,
       } = req.body;
 
       const update: any = {};
@@ -557,6 +590,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
           if (showAnswerKey !== undefined) {
             update.showAnswerKey = !!showAnswerKey;
+          }
+          if (chunkInfo && typeof chunkInfo === "object") {
+            const current = Number((chunkInfo as any).current);
+            const total = Number((chunkInfo as any).total);
+            if (
+              Number.isFinite(current) &&
+              Number.isFinite(total) &&
+              current >= 1 &&
+              total >= 1 &&
+              current <= total
+            ) {
+              update.chunkInfo = {
+                current: Math.floor(current),
+                total: Math.floor(total),
+              };
+            }
+          }
+          if (parentTestId && mongoose.Types.ObjectId.isValid(String(parentTestId))) {
+            update.parentTestId = new mongoose.Types.ObjectId(String(parentTestId));
           }
         }
 
@@ -642,6 +694,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           update.customSubjects = customSubjects.filter(
             (s: string) => VALID_SUBJECTS.includes(s)
           );
+        }
+        if (chunkInfo && typeof chunkInfo === "object") {
+          const current = Number((chunkInfo as any).current);
+          const total = Number((chunkInfo as any).total);
+          if (
+            Number.isFinite(current) &&
+            Number.isFinite(total) &&
+            current >= 1 &&
+            total >= 1 &&
+            current <= total
+          ) {
+            update.chunkInfo = {
+              current: Math.floor(current),
+              total: Math.floor(total),
+            };
+          }
+        }
+        if (parentTestId && mongoose.Types.ObjectId.isValid(String(parentTestId))) {
+          update.parentTestId = new mongoose.Types.ObjectId(String(parentTestId));
         }
       }
 

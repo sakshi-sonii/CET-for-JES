@@ -83,6 +83,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
   const [reviewComment, setReviewComment] = useState<Record<string, string>>({});
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [expandedCoordinatorTests, setExpandedCoordinatorTests] = useState<Set<string>>(new Set());
+  const [expandedTeacherSubmissions, setExpandedTeacherSubmissions] = useState<Set<string>>(new Set());
 
   const myTests = tests.filter(t => t.coordinatorId === user._id || (typeof t.coordinatorId === 'object' && t.coordinatorId?._id === user._id));
   const pendingApproval = myTests.filter(t => !t.approved);
@@ -730,7 +731,9 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                 <p className="text-gray-600">No teacher submissions pending review.</p>
               ) : (
                 <div className="space-y-4">
-                  {pendingTeacherReview.map((test) => (
+                  {pendingTeacherReview.map((test) => {
+                    const isExpanded = expandedTeacherSubmissions.has(test._id);
+                    return (
                     <div key={test._id} className="border rounded-lg p-4">
                       <div className="flex justify-between items-start gap-3">
                         <div>
@@ -762,6 +765,57 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                         ))}
                       </div>
 
+                      <div className="mt-3">
+                        <button
+                          onClick={() => {
+                            const next = new Set(expandedTeacherSubmissions);
+                            if (next.has(test._id)) {
+                              next.delete(test._id);
+                            } else {
+                              next.add(test._id);
+                            }
+                            setExpandedTeacherSubmissions(next);
+                          }}
+                          className="px-3 py-2 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 inline-flex items-center gap-1 text-sm"
+                        >
+                          {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          {isExpanded ? 'Hide Preview' : 'Preview'}
+                        </button>
+                      </div>
+
+                      {isExpanded && test.sections && (
+                        <div className="mt-4 border-t pt-4">
+                          {test.sections.map((section) => section && (
+                            <div key={section.subject} className="mb-4">
+                              <h4 className={`font-semibold text-sm uppercase tracking-wide mb-2 ${getSubjectInfo(section.subject).color}`}>
+                                {getSubjectLabel(section.subject)} ({section.questions?.length || 0}Q x {section.marksPerQuestion}m)
+                              </h4>
+                              <div className="space-y-2 pl-4">
+                                {section.questions?.map((q, qIdx) => q && (
+                                  <div key={qIdx} className="text-sm border-l-2 border-gray-200 pl-3 py-1">
+                                    <p className="font-medium text-gray-800">
+                                      Q{qIdx + 1}. {q.question}
+                                      {!q.question && q.questionImage && <span className="text-gray-400 italic">(Image question)</span>}
+                                    </p>
+                                    {q.questionImage && (
+                                      <img src={q.questionImage} alt="Question" className="mt-1 max-h-20 rounded border" />
+                                    )}
+                                    <div className="flex flex-wrap gap-3 mt-1 text-gray-600">
+                                      {q.options?.map((opt, optIdx) => (
+                                        <span key={optIdx} className={optIdx === q.correct ? 'text-green-700 font-semibold' : ''}>
+                                          {String.fromCharCode(65 + optIdx)}. {opt || (q.optionImages?.[optIdx] ? '(image)' : '(empty)')}{optIdx === q.correct && ' ✓'}
+                                        </span>
+                                      ))}
+                                    </div>
+                                    {q.explanation && <p className="text-xs text-blue-600 mt-1">Tip: {q.explanation}</p>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                       <textarea
                         value={reviewComment[test._id] || ''}
                         onChange={(e) => setReviewComment(prev => ({ ...prev, [test._id]: e.target.value }))}
@@ -787,7 +841,8 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
