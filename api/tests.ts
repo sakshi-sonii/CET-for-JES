@@ -49,12 +49,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } else if (currentUser.role === "teacher") {
           query.teacherId = currentUser._id;
         } else if (currentUser.role === "coordinator") {
-          // Coordinators can view all tests they created or pending approval
+          // Coordinators can view:
+          // 1) their own composed tests
+          // 2) teacher submissions pending coordinator-side workflow
           query = {
             _id: testId,
             $or: [
               { coordinatorId: currentUser._id },
-              { approved: false }
+              {
+                teacherId: { $exists: true, $ne: null },
+                approved: false,
+              },
             ]
           };
         }
@@ -91,11 +96,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
         };
       } else if (currentUser.role === "coordinator") {
-        // Coordinators see all unapproved tests (both from teachers and other coordinators)
-        // plus any tests they created
+        // Coordinators see teacher submissions pending coordinator-side workflow
+        // plus tests created by themselves.
         query = {
           $or: [
-            { approved: false },
+            {
+              teacherId: { $exists: true, $ne: null },
+              approved: false,
+            },
             { coordinatorId: new mongoose.Types.ObjectId(currentUser._id.toString()) }
           ]
         };
@@ -354,12 +362,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const test = await withRetry(() =>
           Test.findById(testId)
-            .select("approved testType stream sections.subject sections.questions")
+            .select("approved testType stream teacherId coordinatorId sections.subject sections.questions")
             .lean()
         );
 
         if (!test) {
           return res.status(404).json({ message: "Test not found" });
+        }
+
+        if (test.teacherId) {
+          return res.status(403).json({
+            message: "Admin can only approve tests created by coordinators",
+          });
         }
 
         if (test.approved) {
