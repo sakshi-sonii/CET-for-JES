@@ -334,7 +334,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
       }
 
       const testTitle = draftTest.title.trim();
-      const CHUNK_SIZE_LIMIT = 4.5 * 1024 * 1024; // 4.5 MB in bytes
+      const CHUNK_SIZE_LIMIT = 3.5 * 1024 * 1024; // 3.5 MB in bytes (conservative limit accounting for HTTP overhead)
 
       // Check if payload fits within limit
       const initialPayload = createPayload(sections, testTitle);
