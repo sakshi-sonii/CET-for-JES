@@ -372,6 +372,11 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
             );
           }
 
+          // Mark this as a chunk submission to skip validation on non-first chunks
+          chunkPayload.isChunk = true;
+          chunkPayload.chunkIndex = i;
+          chunkPayload.totalChunks = totalChunks;
+
           // On first chunk, don't set parentTestId (this will be the parent)
           // On subsequent chunks, set parentTestId to first chunk's ID
           if (i > 0 && parentTestId) {

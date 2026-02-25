@@ -238,7 +238,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ---- Mock test validation ----
-      if (effectiveTestType === "mock") {
+      // Skip mock test validation for non-first chunks in multi-chunk submissions
+      const isNonFirstChunk = req.body.isChunk && req.body.chunkIndex > 0;
+      
+      if (effectiveTestType === "mock" && !isNonFirstChunk) {
         // Must have physics and chemistry
         if (!providedSubjects.includes("physics") || !providedSubjects.includes("chemistry")) {
           return res.status(400).json({
