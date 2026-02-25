@@ -301,7 +301,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ---- Build processed sections ----
-      const processedSections = sections.map((section: any) => {
+      processedSections = processedSections.map((section: any) => {
         const subject = section.subject.toLowerCase();
         return {
           subject,
