@@ -673,10 +673,10 @@ const AdminView: React.FC<AdminViewProps> = ({
             </div>
 
             <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-xl font-bold mb-4">All Tests ({tests.length})</h2>
+              <h2 className="text-xl font-bold mb-4">All Coordinator Tests ({tests.filter(t => t && !t.teacherId).length})</h2>
               <div className="space-y-2">
-                {tests.filter(t => t).map((t) => {
-                  const teacher = users.find((u) => u && safeGetId(u) === safeGetId(t.teacherId))
+                {tests.filter(t => t && !t.teacherId).map((t) => {
+                  const coordinator = users.find((u) => u && safeGetId(u) === safeGetId(t.coordinatorId))
                   return (
                     <div key={t._id} className="p-4 border rounded-lg">
                       <div className="flex justify-between items-start">
@@ -693,7 +693,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                             ))}
                           </div>
                           <p className="text-xs text-gray-500 mt-1">
-                            By: {teacher?.name || 'Unknown'} | {getTotalMarks(t)} marks | {getTotalDuration(t)} min
+                            By: {coordinator?.name || 'Unknown'} | {getTotalMarks(t)} marks | {getTotalDuration(t)} min
                           </p>
                           {(t.testType === 'mock' || t.testType === 'custom') && (
                             <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
@@ -1030,7 +1030,7 @@ const AdminView: React.FC<AdminViewProps> = ({
                 <p className="text-3xl font-bold">{tests.length}</p>
                 <p className="text-gray-600">Total Tests</p>
                 <div className="mt-2 text-xs text-gray-500">
-                  {tests.filter(t => t?.approved).length} approved | {pendingTests.length} pending
+                  {tests.filter(t => t?.approved && !t?.teacherId).length} approved | {pendingTests.length} pending
                   <br />
                   {tests.filter(t => t?.testType === 'mock').length} mock | {tests.filter(t => t?.testType === 'custom').length} custom
                 </div>

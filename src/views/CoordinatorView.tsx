@@ -82,6 +82,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
   const [creatingTest, setCreatingTest] = useState(false);
   const [reviewComment, setReviewComment] = useState<Record<string, string>>({});
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [expandedCoordinatorTests, setExpandedCoordinatorTests] = useState<Set<string>>(new Set());
 
   const myTests = tests.filter(t => t.coordinatorId === user._id || (typeof t.coordinatorId === 'object' && t.coordinatorId?._id === user._id));
   const pendingApproval = myTests.filter(t => !t.approved);
@@ -797,62 +798,113 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                 <p className="text-gray-600">No coordinator tests created yet.</p>
               ) : (
                 <div className="space-y-4">
-                  {myTests.map((test) => (
-                    <div key={test._id} className="border rounded-lg p-4">
-                      <div className="flex justify-between items-start mb-3">
-                        <div>
-                          <p className="font-semibold">{test.title}</p>
-                          <p className="text-xs text-gray-500">Created: {new Date(test.createdAt || '').toLocaleDateString()}</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <span className={`text-xs px-2 py-1 rounded font-semibold ${
-                            test.approved ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                          }`}>
-                            {test.approved ? 'Approved by Admin' : 'Pending Admin Approval'}
-                          </span>
-                          {test.approved && (
-                            <span className={`text-xs px-2 py-1 rounded font-semibold ${
-                              test.active ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
-                            }`}>
-                              {test.active ? 'Active' : 'Inactive'}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
-                        {test.sections.map((section, idx) => (
-                          <div key={idx} className={`p-2 rounded ${getSubjectInfo(section.subject).bgColor}`}>
-                            <span className="font-medium">{getSubjectLabel(section.subject)}</span>
-                            <span className="text-sm text-gray-700 ml-2">{section.questions.length} questions</span>
+                  {myTests.map((test) => {
+                    const isExpanded = expandedCoordinatorTests.has(test._id);
+                    return (
+                      <div key={test._id} className="border rounded-lg p-4">
+                        <div className="flex justify-between items-start mb-3">
+                          <div className="flex-1">
+                            <p className="font-semibold">{test.title}</p>
+                            <p className="text-xs text-gray-500">Created: {new Date(test.createdAt || '').toLocaleDateString()}</p>
                           </div>
-                        ))}
-                      </div>
+                          <div className="flex gap-2">
+                            <span className={`text-xs px-2 py-1 rounded font-semibold ${
+                              test.approved ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                            }`}>
+                              {test.approved ? 'Approved by Admin' : 'Pending Admin Approval'}
+                            </span>
+                            {test.approved && (
+                              <span className={`text-xs px-2 py-1 rounded font-semibold ${
+                                test.active ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
+                              }`}>
+                                {test.active ? 'Active' : 'Inactive'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
 
-                      <div className="flex gap-2">
-                        <button
-                          disabled={!test.approved || !!actionLoading}
-                          onClick={() => handleToggleActive(test._id, test.active)}
-                          className={`px-4 py-2 rounded text-white disabled:opacity-60 ${
-                            test.active ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
-                          }`}
-                        >
-                          {actionLoading === `active-${test._id}` ? '...' : test.active ? 'Deactivate Access' : 'Activate Access'}
-                        </button>
-                        <button
-                          disabled={!!actionLoading}
-                          onClick={() => handleToggleAnswerKey(test._id, test.showAnswerKey)}
-                          className={`px-4 py-2 rounded border disabled:opacity-60 inline-flex items-center gap-1 ${
-                            test.showAnswerKey
-                              ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                          }`}
-                        >
-                          {actionLoading === `answer-${test._id}` ? '...' : test.showAnswerKey ? <><EyeOff size={16} /> Hide Answer Key</> : <><Eye size={16} /> Show Answer Key</>}
-                        </button>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+                          {test.sections.map((section, idx) => (
+                            <div key={idx} className={`p-2 rounded ${getSubjectInfo(section.subject).bgColor}`}>
+                              <span className="font-medium">{getSubjectLabel(section.subject)}</span>
+                              <span className="text-sm text-gray-700 ml-2">{section.questions.length} questions</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="flex gap-2 mb-3">
+                          <button
+                            onClick={() => {
+                              const newExpanded = new Set(expandedCoordinatorTests);
+                              if (newExpanded.has(test._id)) {
+                                newExpanded.delete(test._id);
+                              } else {
+                                newExpanded.add(test._id);
+                              }
+                              setExpandedCoordinatorTests(newExpanded);
+                            }}
+                            className="px-3 py-2 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 inline-flex items-center gap-1 text-sm"
+                          >
+                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                            {isExpanded ? 'Hide Preview' : 'Preview'}
+                          </button>
+                          <button
+                            disabled={!test.approved || !!actionLoading}
+                            onClick={() => handleToggleActive(test._id, test.active)}
+                            className={`px-4 py-2 rounded text-white disabled:opacity-60 ${
+                              test.active ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
+                            }`}
+                          >
+                            {actionLoading === `active-${test._id}` ? '...' : test.active ? 'Deactivate Access' : 'Activate Access'}
+                          </button>
+                          <button
+                            disabled={!!actionLoading}
+                            onClick={() => handleToggleAnswerKey(test._id, test.showAnswerKey)}
+                            className={`px-4 py-2 rounded border disabled:opacity-60 inline-flex items-center gap-1 ${
+                              test.showAnswerKey
+                                ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                            }`}
+                          >
+                            {actionLoading === `answer-${test._id}` ? '...' : test.showAnswerKey ? <><EyeOff size={16} /> Hide Answer Key</> : <><Eye size={16} /> Show Answer Key</>}
+                          </button>
+                        </div>
+
+                        {isExpanded && test.sections && (
+                          <div className="mt-4 border-t pt-4">
+                            {test.sections.map((section) => section && (
+                              <div key={section.subject} className="mb-4">
+                                <h4 className={`font-semibold text-sm uppercase tracking-wide mb-2 ${getSubjectInfo(section.subject).color}`}>
+                                  {getSubjectLabel(section.subject)} ({section.questions?.length || 0}Q × {section.marksPerQuestion}m)
+                                </h4>
+                                <div className="space-y-2 pl-4">
+                                  {section.questions?.map((q, qIdx) => q && (
+                                    <div key={qIdx} className="text-sm border-l-2 border-gray-200 pl-3 py-1">
+                                      <p className="font-medium text-gray-800">
+                                        Q{qIdx + 1}. {q.question}
+                                        {!q.question && q.questionImage && <span className="text-gray-400 italic">(Image question)</span>}
+                                      </p>
+                                      {q.questionImage && (
+                                        <img src={q.questionImage} alt="Question" className="mt-1 max-h-20 rounded border" />
+                                      )}
+                                      <div className="flex flex-wrap gap-3 mt-1 text-gray-600">
+                                        {q.options?.map((opt, optIdx) => (
+                                          <span key={optIdx} className={optIdx === q.correct ? 'text-green-700 font-semibold' : ''}>
+                                            {String.fromCharCode(65 + optIdx)}. {opt || (q.optionImages?.[optIdx] ? '(image)' : '(empty)')}{optIdx === q.correct && ' ✓'}
+                                          </span>
+                                        ))}
+                                      </div>
+                                      {q.explanation && <p className="text-xs text-blue-600 mt-1">💡 {q.explanation}</p>}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
