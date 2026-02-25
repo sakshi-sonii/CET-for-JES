@@ -208,51 +208,65 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
   const splitSectionsIntoChunks = (sections: TestSection[], title: string, sizeLimit: number): TestSection[][] => {
     const chunks: TestSection[][] = [];
     let currentChunk: TestSection[] = [];
-
+    
+    // For each section, add questions incrementally to chunks
     for (const section of sections) {
-      let remainingQuestions = [...section.questions];
+      let sectionIndex = 0;
+      let currentSectionQuestions: Question[] = [];
 
-      while (remainingQuestions.length > 0) {
-        const testPayload = createPayload([...currentChunk, { ...section, questions: remainingQuestions }], title);
+      while (sectionIndex < section.questions.length) {
+        const nextQuestion = section.questions[sectionIndex];
+        
+        // Try adding the next question to current section in chunk
+        const testSectionWithQuestion: TestSection = {
+          ...section,
+          questions: [...currentSectionQuestions, nextQuestion],
+        };
+
+        // Create a test chunk with current sections + updated section
+        const testPayload = createPayload(
+          [...currentChunk, testSectionWithQuestion],
+          title
+        );
         const payloadSize = getPayloadSize(testPayload);
 
         if (payloadSize <= sizeLimit) {
-          // All remaining questions fit
-          currentChunk.push({ ...section, questions: remainingQuestions });
-          remainingQuestions = [];
-        } else if (remainingQuestions.length > 1) {
-          // Split questions in half
-          const midpoint = Math.floor(remainingQuestions.length / 2);
-          const fittingQuestions = remainingQuestions.slice(0, midpoint);
-
-          currentChunk.push({ ...section, questions: fittingQuestions });
-
-          // Check if current chunk fits
-          const chunkPayload = createPayload(currentChunk, title);
-          if (getPayloadSize(chunkPayload) <= sizeLimit) {
-            // Current chunk fits, save it and start new one
-            chunks.push(currentChunk);
-            currentChunk = [];
-            remainingQuestions = remainingQuestions.slice(midpoint);
-          } else {
-            // Current chunk still too large, this shouldn't happen if one section fits
-            chunks.push(currentChunk);
-            currentChunk = [];
-            remainingQuestions = remainingQuestions.slice(midpoint);
-          }
+          // Question fits, add it
+          currentSectionQuestions.push(nextQuestion);
+          sectionIndex++;
         } else {
-          // Single question left but doesn't fit with current chunk
-          if (currentChunk.length > 0) {
+          // Question doesn't fit
+          if (currentSectionQuestions.length > 0) {
+            // Save current chunk with what we have
+            currentChunk.push({
+              ...section,
+              questions: currentSectionQuestions,
+            });
             chunks.push(currentChunk);
             currentChunk = [];
+            currentSectionQuestions = [];
+          } else {
+            // Even a single question doesn't fit in empty chunk - add it anyway
+            // This shouldn't happen if sizeLimit is reasonable
+            currentChunk.push({
+              ...section,
+              questions: [nextQuestion],
+            });
+            sectionIndex++;
           }
-          // Add single question as new chunk
-          chunks.push([{ ...section, questions: remainingQuestions }]);
-          remainingQuestions = [];
         }
+      }
+
+      // Add remaining questions from this section to current chunk if any
+      if (currentSectionQuestions.length > 0) {
+        currentChunk.push({
+          ...section,
+          questions: currentSectionQuestions,
+        });
       }
     }
 
+    // Add final chunk if it has content
     if (currentChunk.length > 0) {
       chunks.push(currentChunk);
     }
@@ -335,15 +349,28 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
         createdTests.push(newTest);
       } else {
         // Payload exceeds limit, split into chunks
-        setError('Test size exceeds 4.5 MB, splitting into multiple parts...');
+        setError(`Test size (${(payloadSize / 1024 / 1024).toFixed(2)} MB) exceeds limit, splitting into multiple parts...`);
         
         const sectionChunks = splitSectionsIntoChunks(sections, testTitle, CHUNK_SIZE_LIMIT);
         const totalChunks = sectionChunks.length;
+
+        console.log(`Splitting test into ${totalChunks} chunks`);
 
         for (let i = 0; i < sectionChunks.length; i++) {
           const chunkSections = sectionChunks[i];
           const chunkTitle = totalChunks > 1 ? `${testTitle} (Part ${i + 1}/${totalChunks})` : testTitle;
           const chunkPayload = createPayload(chunkSections, chunkTitle);
+          const chunkSize = getPayloadSize(chunkPayload);
+
+          console.log(`Chunk ${i + 1}/${totalChunks} size: ${(chunkSize / 1024 / 1024).toFixed(2)} MB`);
+
+          if (chunkSize > CHUNK_SIZE_LIMIT) {
+            throw new Error(
+              `Chunk ${i + 1} is still too large (${(chunkSize / 1024 / 1024).toFixed(2)} MB). ` +
+              `The test has questions that are too large to split further. ` +
+              `Consider reducing the number of image questions or file size of images.`
+            );
+          }
 
           // On first chunk, don't set parentTestId (this will be the parent)
           // On subsequent chunks, set parentTestId to first chunk's ID
