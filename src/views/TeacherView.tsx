@@ -973,9 +973,94 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6')
     );
 
+    const supMap: Record<string, string> = {
+      '0': '\u2070',
+      '1': '\u00b9',
+      '2': '\u00b2',
+      '3': '\u00b3',
+      '4': '\u2074',
+      '5': '\u2075',
+      '6': '\u2076',
+      '7': '\u2077',
+      '8': '\u2078',
+      '9': '\u2079',
+      '+': '\u207a',
+      '-': '\u207b',
+      '=': '\u207c',
+      '(': '\u207d',
+      ')': '\u207e',
+      n: '\u207f',
+      i: '\u2071',
+    };
+
+    const subMap: Record<string, string> = {
+      '0': '\u2080',
+      '1': '\u2081',
+      '2': '\u2082',
+      '3': '\u2083',
+      '4': '\u2084',
+      '5': '\u2085',
+      '6': '\u2086',
+      '7': '\u2087',
+      '8': '\u2088',
+      '9': '\u2089',
+      '+': '\u208a',
+      '-': '\u208b',
+      '=': '\u208c',
+      '(': '\u208d',
+      ')': '\u208e',
+      a: '\u2090',
+      e: '\u2091',
+      h: '\u2095',
+      i: '\u1d62',
+      j: '\u2c7c',
+      k: '\u2096',
+      l: '\u2097',
+      m: '\u2098',
+      n: '\u2099',
+      o: '\u2092',
+      p: '\u209a',
+      r: '\u1d63',
+      s: '\u209b',
+      t: '\u209c',
+      u: '\u1d64',
+      v: '\u1d65',
+      x: '\u2093',
+    };
+
+    const toSuperscript = (value: string): string =>
+      value
+        .split('')
+        .map(ch => supMap[ch] ?? supMap[ch.toLowerCase()] ?? ch)
+        .join('');
+
+    const toSubscript = (value: string): string =>
+      value
+        .split('')
+        .map(ch => subMap[ch] ?? subMap[ch.toLowerCase()] ?? ch)
+        .join('');
+
+    const getFormattedText = (node: Node): string => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent || '';
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return '';
+      }
+
+      const el = node as HTMLElement;
+      const content = Array.from(el.childNodes).map(getFormattedText).join('');
+      const tag = el.tagName.toLowerCase();
+
+      if (tag === 'sup') return toSuperscript(content);
+      if (tag === 'sub') return toSubscript(content);
+      if (tag === 'br') return '\n';
+      return content;
+    };
+
     const lines: { text: string; images: string[] }[] = [];
     for (const el of elements) {
-      const text = el.textContent?.trim() || '';
+      const text = getFormattedText(el).trim();
       const imgs = Array.from(el.querySelectorAll('img')).map(
         img => img.getAttribute('src') || ''
       );
@@ -1162,7 +1247,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
           'No valid questions found.\n\n' +
             (isExcel
               ? 'Excel: Each row needs Question (or QuestionImage) and all 4 Options (or OptionImages).'
-              : 'Word: Use format Q1. question â†’ A) B) C) D) â†’ Correct: A â†’ Explanation:')
+              : 'Word: Use format Q1. question  A) B) C) D)  Correct: A  Explanation:')
         );
         return;
       }
@@ -1187,11 +1272,11 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       ).length;
 
       alert(
-        `âœ… Imported ${questions.length} questions to ${
+        ` Imported ${questions.length} questions to ${
           getSubjectInfo(sections[currentSection].subject).label
         }!` +
           (imageCount > 0
-            ? `\nðŸ“¸ ${imageCount} questions contain images.`
+            ? `\n ${imageCount} questions contain images.`
             : '')
       );
     } catch (error: any) {
@@ -1293,9 +1378,9 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         .join(', ');
 
       alert(
-        `âœ… Imported from ${isExcel ? 'Excel' : 'Word'}:\n${summary}\nTotal: ${totalQ} questions` +
+        ` Imported from ${isExcel ? 'Excel' : 'Word'}:\n${summary}\nTotal: ${totalQ} questions` +
           (totalImages > 0
-            ? `\nðŸ“¸ ${totalImages} questions contain images`
+            ? `\n ${totalImages} questions contain images`
             : '')
       );
     } catch (error: any) {
@@ -1352,7 +1437,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
   const createInstructionSheet = (XLSX: any) => {
     const instrData = [
-      ['ðŸ“‹ TEMPLATE INSTRUCTIONS'],
+      [' TEMPLATE INSTRUCTIONS'],
       [''],
       ['Column', 'Description', 'Required?'],
       ['Question', 'Question text', 'Yes (if no QuestionImage)'],
@@ -1361,9 +1446,9 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         'Image URL or base64',
         'Yes (if no Question text)',
       ],
-      ['Option1â€“4', 'Option text', 'Yes (if no OptionImage)'],
+      ['Option1', 'Option text', 'Yes (if no OptionImage)'],
       [
-        'Option1Imageâ€“4Image',
+        'Option1ImageImage',
         'Option image URL or base64',
         'Yes (if no Option text)',
       ],
@@ -1375,22 +1460,22 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         'Optional',
       ],
       [''],
-      ['ðŸ’¡ TIPS:'],
-      ['â€¢ Each question/option: text OR image OR both'],
-      ['â€¢ Correct: 1=Option1, 2=Option2, 3=Option3, 4=Option4'],
-      ['â€¢ Images: full URLs (https://...) or base64 data'],
+      [' TIPS:'],
+      [' Each question/option: text OR image OR both'],
+      [' Correct: 1=Option1, 2=Option2, 3=Option3, 4=Option4'],
+      [' Images: full URLs (https://...) or base64 data'],
       [''],
-      ['ðŸ“Š MARKS PER QUESTION:'],
-      ['â€¢ Physics = 1 mark/question'],
-      ['â€¢ Chemistry = 1 mark/question'],
-      ['â€¢ Mathematics = 2 marks/question'],
-      ['â€¢ Biology = 1 mark/question'],
+      [' MARKS PER QUESTION:'],
+      [' Physics = 1 mark/question'],
+      [' Chemistry = 1 mark/question'],
+      [' Mathematics = 2 marks/question'],
+      [' Biology = 1 mark/question'],
       [''],
-      ['ðŸ“ TEST TYPES:'],
-      ['â€¢ Mock Test: PCM or PCB with two-phase timing'],
-      ['â€¢ Custom Test: Any subjects with single timer'],
+      [' TEST TYPES:'],
+      [' Mock Test: PCM or PCB with two-phase timing'],
+      [' Custom Test: Any subjects with single timer'],
       [
-        'â€¢ For multi-subject Excel: use sheet names Physics, Chemistry, Mathematics, Biology',
+        ' For multi-subject Excel: use sheet names Physics, Chemistry, Mathematics, Biology',
       ],
     ];
     const ws = XLSX.utils.aoa_to_sheet(instrData);
@@ -1506,24 +1591,24 @@ const TeacherView: React.FC<TeacherViewProps> = ({
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
           children: [
-            new TextRun({ text: 'ðŸ“‹ WORD TEMPLATE INSTRUCTIONS', bold: true, size: 28 }),
+            new TextRun({ text: ' WORD TEMPLATE INSTRUCTIONS', bold: true, size: 28 }),
           ],
         }),
         new Paragraph({ children: [] }),
         new Paragraph({
           children: [
-            new TextRun({ text: 'FORMAT RULES â€” Follow exactly:', bold: true, size: 24, color: 'FF0000' }),
+            new TextRun({ text: 'FORMAT RULES  Follow exactly:', bold: true, size: 24, color: 'FF0000' }),
           ],
         }),
-        new Paragraph({ children: [new TextRun({ text: 'â€¢ Questions: Q1. or Q1: or 1. or 1: or Question 1:', size: 22 })] }),
-        new Paragraph({ children: [new TextRun({ text: 'â€¢ Options: A) B) C) D) or a) b) c) d) or (A) (B) (C) (D)', size: 22 })] }),
-        new Paragraph({ children: [new TextRun({ text: 'â€¢ Correct: "Correct: A" or "Answer: 2" or "Ans: B"', size: 22 })] }),
-        new Paragraph({ children: [new TextRun({ text: 'â€¢ Explanation (optional): "Explanation: text"', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: ' Questions: Q1. or Q1: or 1. or 1: or Question 1:', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: ' Options: A) B) C) D) or a) b) c) d) or (A) (B) (C) (D)', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: ' Correct: "Correct: A" or "Answer: 2" or "Ans: B"', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: ' Explanation (optional): "Explanation: text"', size: 22 })] }),
         new Paragraph({ children: [] }),
-        new Paragraph({ children: [new TextRun({ text: 'ðŸ–¼ï¸ PASTE IMAGES directly into the document! They auto-extract as base64.', bold: true, size: 24, color: '0066CC' })] }),
-        new Paragraph({ children: [new TextRun({ text: 'âš ï¸ Each question/option MUST have text OR image.', bold: true, size: 22, color: 'FF6600' })] }),
+        new Paragraph({ children: [new TextRun({ text: ' PASTE IMAGES directly into the document! They auto-extract as base64.', bold: true, size: 24, color: '0066CC' })] }),
+        new Paragraph({ children: [new TextRun({ text: ' Each question/option MUST have text OR image.', bold: true, size: 22, color: 'FF6600' })] }),
         new Paragraph({ children: [] }),
-        new Paragraph({ children: [new TextRun({ text: 'ðŸ“Š Marks: Physics=1, Chemistry=1, Maths=2, Biology=1 per question', size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: ' Marks: Physics=1, Chemistry=1, Maths=2, Biology=1 per question', size: 22 })] }),
         new Paragraph({ children: [] }),
       ];
 
@@ -1633,7 +1718,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       const pc = t.sectionTimings?.physicsChemistry ?? 90;
       const mb = t.sectionTimings?.mathsOrBiology ?? 90;
       const phase2Label = t.stream === 'PCB' ? 'Bio' : 'Maths';
-      return `Phy+Chem: ${pc}min â†’ ${phase2Label}: ${mb}min (Total: ${pc + mb}min)`;
+      return `Phy+Chem: ${pc}min  ${phase2Label}: ${mb}min (Total: ${pc + mb}min)`;
     } else if (t.testType === 'custom') {
       return `${t.customDuration ?? 60}min`;
     }
@@ -1706,11 +1791,11 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     <button
                       onClick={() => setEditForm({ ...editForm, questionImage: '' })}
                       className="text-red-500 hover:text-red-700 text-xs px-1"
-                    >âœ•</button>
+                    ></button>
                   </div>
                 )}
                 {!editForm.question.trim() && !editForm.questionImage && (
-                  <span className="text-xs text-amber-600">âš  Need text or image</span>
+                  <span className="text-xs text-amber-600"> Need text or image</span>
                 )}
               </div>
             </div>
@@ -1777,11 +1862,11 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                             setEditForm({ ...editForm, optionImages: newImages });
                           }}
                           className="text-red-500 text-xs px-1"
-                        >âœ•</button>
+                        >✕</button>
                       </div>
                     )}
                     {!opt.trim() && !editForm.optionImages[idx] && (
-                      <span className="text-xs text-amber-600">âš  Need text or image</span>
+                      <span className="text-xs text-amber-600"> Need text or image</span>
                     )}
                   </div>
                 </div>
@@ -1791,7 +1876,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             {/* Explanation */}
             <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
               <label className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1 block">
-                Explanation (optional â€” text, image, or both)
+                Explanation (optional  text, image, or both)
               </label>
               <textarea
                 placeholder="Explanation text (optional)"
@@ -1821,7 +1906,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     <button
                       onClick={() => setEditForm({ ...editForm, explanationImage: '' })}
                       className="text-red-500 hover:text-red-700 text-xs px-1"
-                    >âœ•</button>
+                    ></button>
                   </div>
                 )}
               </div>
@@ -1933,7 +2018,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                       })}
                     </div>
                     <p className="text-xs text-gray-400 mt-1">
-                      {getDraftQuestionCount(draft)} questions total â€¢ Saved {formatDraftDate(draft.lastSaved)}
+                      {getDraftQuestionCount(draft)} questions total  Saved {formatDraftDate(draft.lastSaved)}
                     </p>
                   </div>
                   <div className="flex gap-2 ml-4 shrink-0">
@@ -2114,7 +2199,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 {currentDraftId && (
                   <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
                     <Save className="w-3 h-3" />
-                    Editing draft â€” auto-saving changes
+                    Editing draft  auto-saving changes
                   </p>
                 )}
               </div>
@@ -2183,7 +2268,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             {/* Subject selection */}
             <div className="mb-6 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
               <h3 className="font-semibold text-indigo-800 mb-3">
-                ðŸ“š Select Subjects
+                 Select Subjects
               </h3>
               
               {!hasAssignedSubjects ? (
@@ -2272,7 +2357,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         {sub.marks > 1 ? 's' : ''}/Q
                         {isSelected && qCount > 0 && (
                           <span className="ml-1 font-medium text-green-600">
-                            â€¢ {qCount}Q added
+                             {qCount}Q added
                           </span>
                         )}
                       </div>
@@ -2336,12 +2421,12 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
                 <div className="text-sm text-gray-600 mb-3 p-3 bg-white rounded border">
                   <p className="font-medium mb-2">
-                    ðŸ“‹ Supported Formats:
+                     Supported Formats:
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div className="p-2 bg-green-50 rounded border border-green-200">
                       <p className="font-medium text-green-800">
-                        ðŸ“Š Excel (.xlsx)
+                         Excel (.xlsx)
                       </p>
                       <p className="text-xs text-green-700 mt-1">
                         {selectedSubjects.length > 1
@@ -2355,14 +2440,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     </div>
                     <div className="p-2 bg-blue-50 rounded border border-blue-200">
                       <p className="font-medium text-blue-800">
-                        ðŸ“ Word (.docx)
+                         Word (.docx)
                       </p>
                       <p className="text-xs text-blue-700 mt-1">
                         Paste images directly!
                         <br />
                         {selectedSubjects.length > 1
                           ? 'Use === SUBJECT === headers'
-                          : 'Q1. â†’ A) B) C) D) format'}
+                          : 'Q1.  A) B) C) D) format'}
                       </p>
                     </div>
                   </div>
@@ -2371,7 +2456,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 {/* Templates */}
                 <div className="mb-3">
                   <p className="text-sm font-medium text-gray-700 mb-2">
-                    ðŸ“¥ Download Templates:
+                     Download Templates:
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {selectedSubjects.length > 1 ? (
@@ -2424,7 +2509,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                 {selectedSubjects.length > 1 && (
                   <div>
                     <p className="text-sm font-medium text-gray-700 mb-2">
-                      ðŸ“¤ Upload All Subjects at Once:
+                       Upload All Subjects at Once:
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -2621,14 +2706,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               }
                               className="text-red-500 hover:text-red-700 text-xs px-1"
                             >
-                              âœ•
+                              
                             </button>
                           </div>
                         )}
                         {!questionForm.question.trim() &&
                           !questionForm.questionImage && (
                             <span className="text-xs text-amber-600">
-                              âš  Need text or image
+                               Need text or image
                             </span>
                           )}
                       </div>
@@ -2726,14 +2811,14 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                                   }}
                                   className="text-red-500 text-xs px-1"
                                 >
-                                  âœ•
+                                  
                                 </button>
                               </div>
                             )}
                             {!opt.trim() &&
                               !questionForm.optionImages[idx] && (
                                 <span className="text-xs text-amber-600">
-                                  âš  Need text or image
+                                   Need text or image
                                 </span>
                               )}
                           </div>
@@ -2744,7 +2829,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                     {/* Explanation */}
                     <div className="mb-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
                       <label className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1 block">
-                        Explanation (optional â€” text, image, or both)
+                        Explanation (optional  text, image, or both)
                       </label>
                       <textarea
                         placeholder="Explanation text (optional)"
@@ -2787,7 +2872,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               }
                               className="text-red-500 hover:text-red-700 text-xs px-1"
                             >
-                              âœ•
+                              
                             </button>
                           </div>
                         )}
@@ -2897,7 +2982,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                                   <div className="mt-2 p-2 bg-amber-50 rounded border border-amber-200">
                                     {q.explanation && (
                                       <p className="text-xs text-amber-800">
-                                        ðŸ’¡ {q.explanation}
+                                         {q.explanation}
                                       </p>
                                     )}
                                     {q.explanationImage && (
@@ -2976,7 +3061,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             {sections.length > 0 && (
               <div className="bg-gray-50 border rounded-lg p-4 mb-6">
                 <h4 className="font-semibold mb-2">
-                  ðŸ“Š Test Summary
+                   Test Summary
                 </h4>
                 <div
                   className={`grid gap-4 text-sm ${
@@ -3006,7 +3091,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         </strong>
                         {imageQCount > 0 && (
                           <span className="text-xs text-blue-600 block">
-                            ðŸ“¸ {imageQCount} with images
+                             {imageQCount} with images
                           </span>
                         )}
                       </div>
