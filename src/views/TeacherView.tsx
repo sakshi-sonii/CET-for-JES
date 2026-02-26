@@ -1824,7 +1824,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                           : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
                       }`}
                     >
-                      {editForm.correct === idx ? 'âœ“ Correct' : 'Set Correct'}
+                      {editForm.correct === idx ? ' Correct' : 'Set Correct'}
                     </button>
                   </div>
                   <input
@@ -2114,7 +2114,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               className={`px-3 py-1 rounded-full text-xs font-medium ${info.badgeColor}`}
                             >
                               {info.label}:{' '}
-                              {s.questions?.length || 0}Q Ã—{' '}
+                              {s.questions?.length || 0}Q —{' '}
                               {s.marksPerQuestion ||
                                 getMarksPerQuestion(s.subject)}
                               m
@@ -2346,7 +2346,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                         </span>
                         {isSelected ? (
                           <span className="w-5 h-5 bg-green-500 text-white rounded-full flex items-center justify-center text-xs">
-                            âœ“
+                            
                           </span>
                         ) : (
                           <Plus className="w-4 h-4 text-gray-400" />
@@ -2750,7 +2750,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                               }`}
                             >
                               {questionForm.correct === idx
-                                ? 'âœ“ Correct'
+                                ? ' Correct'
                                 : 'Set Correct'}
                             </button>
                           </div>
@@ -2968,7 +2968,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                                         )}
                                         {optIdx === q.correct && (
                                           <span className="ml-1 text-green-600">
-                                            âœ“
+                                            
                                           </span>
                                         )}
                                       </div>
@@ -3086,7 +3086,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                           {info.label}:
                         </span>{' '}
                         <strong>
-                          {s.questions.length} Q Ã— {info.marks} ={' '}
+                          {s.questions.length} Q — {info.marks} ={' '}
                           {s.questions.length * info.marks} marks
                         </strong>
                         {imageQCount > 0 && (
