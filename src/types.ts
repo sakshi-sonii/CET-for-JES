@@ -36,6 +36,7 @@ export type TestType = 'mock' | 'custom';
 export interface Test {
   _id: string;
   title: string;
+  topic?: string;
   course: string;
   teacherId?: string | { _id: string; name?: string };
   coordinatorId?: string | { _id: string; name?: string };
@@ -86,6 +87,7 @@ export interface Test {
     | 'submitted_to_admin'
     | 'approved';
   reviewComment?: string;
+  submittedToCoordinatorAt?: string;
 
   approved: boolean;
   active: boolean;

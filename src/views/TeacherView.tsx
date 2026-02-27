@@ -26,6 +26,7 @@ interface SectionForm {
 interface DraftTest {
   id: string;
   title: string;
+  topic: string;
   course: string;
   testType: TestType;
   stream: CourseStream;
@@ -118,6 +119,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
   // Test form
   const [testTitle, setTestTitle] = useState('');
+  const [testTopic, setTestTopic] = useState('');
   const [testCourse, setTestCourse] = useState('');
   const [selectedSubjects, setSelectedSubjects] = useState<SubjectKey[]>([]);
   const [sections, setSections] = useState<SectionForm[]>([]);
@@ -161,6 +163,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [draftSaveStatus, setDraftSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [showDraftsList, setShowDraftsList] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // ========================
@@ -178,33 +181,87 @@ const TeacherView: React.FC<TeacherViewProps> = ({
   });
 
   // ========================
-  // LOAD DRAFTS FROM LOCALSTORAGE
+  // LOAD DRAFTS FROM LOCALSTORAGE + DATABASE
   // ========================
   const [subjects, setSubjects] = useState<Subject[]>([])
 
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(`${DRAFTS_STORAGE_KEY}_${user._id}`);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          setDrafts(parsed);
-        }
+  const mergeDraftsByLatest = (localDrafts: DraftTest[], remoteDrafts: DraftTest[]): DraftTest[] => {
+    const mergedById = new Map<string, DraftTest>();
+
+    for (const draft of [...remoteDrafts, ...localDrafts]) {
+      if (!draft?.id) continue;
+      const existing = mergedById.get(draft.id);
+      if (!existing) {
+        mergedById.set(draft.id, draft);
+        continue;
       }
-    } catch (e) {
-      console.error('Failed to load drafts:', e);
+
+      const existingTime = new Date(existing.lastSaved || 0).getTime();
+      const incomingTime = new Date(draft.lastSaved || 0).getTime();
+      if (incomingTime >= existingTime) {
+        mergedById.set(draft.id, draft);
+      }
     }
-    
-    // Fetch subjects
-    const fetchSubjects = async () => {
+
+    return Array.from(mergedById.values()).sort(
+      (a, b) =>
+        new Date(b.lastSaved || 0).getTime() - new Date(a.lastSaved || 0).getTime()
+    );
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadInitialData = async () => {
+      let localDrafts: DraftTest[] = [];
+      try {
+        const stored = localStorage.getItem(`${DRAFTS_STORAGE_KEY}_${user._id}`);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            localDrafts = parsed;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load drafts:', e);
+      }
+
+      let remoteDrafts: DraftTest[] = [];
+      try {
+        const remote = await api('teacher-drafts');
+        if (Array.isArray(remote?.drafts)) {
+          remoteDrafts = remote.drafts;
+        }
+      } catch (error) {
+        console.error('Failed to fetch drafts from database:', error);
+      }
+
+      const merged = mergeDraftsByLatest(localDrafts, remoteDrafts);
+      if (mounted) {
+        setDrafts(merged);
+      }
+      try {
+        localStorage.setItem(`${DRAFTS_STORAGE_KEY}_${user._id}`, JSON.stringify(merged));
+      } catch (error) {
+        console.error('Failed to persist merged drafts locally:', error);
+      }
+
+      // Fetch subjects
       try {
         const data = await api('subjects')
-        setSubjects(data || [])
+        if (mounted) {
+          setSubjects(data || [])
+        }
       } catch (error) {
         console.error('Failed to fetch subjects:', error)
       }
-    }
-    fetchSubjects()
+    };
+
+    loadInitialData();
+
+    return () => {
+      mounted = false;
+    };
   }, [user._id]);
 
   // ========================
@@ -255,6 +312,24 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     }
   }, [user._id]);
 
+  const syncDraftsToDatabase = useCallback(async (draftsToSync: DraftTest[]) => {
+    if (!Array.isArray(draftsToSync)) return;
+    await api('teacher-drafts', 'PUT', { drafts: draftsToSync });
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await syncDraftsToDatabase(drafts);
+      onLogout();
+    } catch (error: any) {
+      alert(error?.message || 'Failed to store drafts in database. Please try logout again.');
+    } finally {
+      setLoggingOut(false);
+    }
+  }, [loggingOut, drafts, syncDraftsToDatabase, onLogout]);
+
   // ========================
   // AUTO-SAVE DRAFT (debounced)
   // ========================
@@ -273,6 +348,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     const draft: DraftTest = {
       id: currentDraftId || `draft_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       title: testTitle || 'Untitled Draft',
+      topic: testTopic,
       course: testCourse,
       testType,
       stream,
@@ -315,7 +391,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     setTimeout(() => setDraftSaveStatus('saved'), 500);
     setTimeout(() => setDraftSaveStatus('idle'), 2500);
   }, [
-    activeTab, testTitle, testCourse, testType, stream, selectedSubjects,
+    activeTab, testTitle, testTopic, testCourse, testType, stream, selectedSubjects,
     sections, phyChemTime, mathBioTime, customDuration, showAnswerKeyOnCreate,
     questionForm, currentSection, currentDraftId, persistDrafts
   ]);
@@ -338,7 +414,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
       }
     };
   }, [
-    testTitle, testCourse, testType, stream, selectedSubjects,
+    testTitle, testTopic, testCourse, testType, stream, selectedSubjects,
     sections, phyChemTime, mathBioTime, customDuration,
     showAnswerKeyOnCreate, questionForm, currentSection, autoSaveDraft, activeTab
   ]);
@@ -356,6 +432,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
   const loadDraft = (draft: DraftTest) => {
     setTestTitle(draft.title === 'Untitled Draft' ? '' : draft.title);
+    setTestTopic(draft.topic || '');
     setTestCourse(draft.course);
     setTestType(draft.testType);
     setStream(draft.stream);
@@ -829,6 +906,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
       const payload: any = {
         title: testTitle,
+        topic: testTopic.trim() || 'General',
         course: testCourse,
         testType: 'custom',
         showAnswerKey: false,
@@ -860,6 +938,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
       // Reset
       setTestTitle('');
+      setTestTopic('');
       setTestCourse('');
       setSelectedSubjects([]);
       setSections([]);
@@ -1962,10 +2041,11 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             )}
             <span className="text-gray-600">Welcome, <b>{user?.name}</b></span>
             <button
-              onClick={onLogout}
-              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-60"
             >
-              <LogOut size={20} /> Logout
+              <LogOut size={20} /> {loggingOut ? 'Saving drafts...' : 'Logout'}
             </button>
           </div>
         </div>
@@ -2539,7 +2619,7 @@ const TeacherView: React.FC<TeacherViewProps> = ({
             )}
 
             {/* Title & Course */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               <div>
                 <label className="block text-sm font-medium mb-1">
                   Test Title *
@@ -2549,6 +2629,18 @@ const TeacherView: React.FC<TeacherViewProps> = ({
                   placeholder="e.g., Physics Chapter 1 Test or JEE Mock Test 1"
                   value={testTitle}
                   onChange={e => setTestTitle(e.target.value)}
+                  className="w-full px-4 py-2 border rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Topic
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g., Kinematics, Mole Concept, Algebra"
+                  value={testTopic}
+                  onChange={e => setTestTopic(e.target.value)}
                   className="w-full px-4 py-2 border rounded-lg"
                 />
               </div>

@@ -251,6 +251,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const {
         title,
+        topic,
         course,
         testType = "custom",
         stream,
@@ -457,6 +458,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // ---- Build test document ----
       const testDoc: any = {
         title: isChunk ? normalizeChunkTitle(title) : title.trim(),
+        topic: typeof topic === "string" && topic.trim() ? topic.trim() : "General",
         course,
         testType: effectiveTestType,
         sections: processedSections,
@@ -501,6 +503,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         testDoc.teacherId = new mongoose.Types.ObjectId(currentUser._id.toString());
         testDoc.reviewStatus = "submitted_to_coordinator";
         testDoc.reviewComment = "";
+        testDoc.submittedToCoordinatorAt = new Date();
         testDoc.testType = "custom";
         testDoc.customDuration = 60;
         testDoc.customSubjects = providedSubjects;
@@ -689,6 +692,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const {
         active,
         title,
+        topic,
         sections,
         sectionTimings,
         showAnswerKey,
@@ -766,6 +770,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             update.title = title.trim();
             if (currentUser.role === "teacher") teacherEdited = true;
           }
+          if (typeof topic === "string") {
+            const normalizedTopic = topic.trim() || "General";
+            update.topic = normalizedTopic;
+            if (currentUser.role === "teacher") teacherEdited = true;
+          }
           if (testType && ["mock", "custom"].includes(testType)) {
             update.testType = testType;
             if (currentUser.role === "teacher") teacherEdited = true;
@@ -803,6 +812,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (currentUser.role === "teacher" && teacherEdited) {
             update.reviewStatus = "submitted_to_coordinator";
             update.reviewComment = "";
+            update.submittedToCoordinatorAt = new Date();
           }
         }
       } else {
@@ -812,6 +822,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           update.showAnswerKey = !!showAnswerKey;
         }
         if (title?.trim()) update.title = title.trim();
+        if (typeof topic === "string") {
+          update.topic = topic.trim() || "General";
+        }
         if (testType && ["mock", "custom"].includes(testType)) {
           update.testType = testType;
         }

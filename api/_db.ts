@@ -124,6 +124,7 @@ const sectionSchema = new mongoose.Schema(
 const testSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
+    topic: { type: String, default: "General" },
     course: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Course",
@@ -188,6 +189,7 @@ const testSchema = new mongoose.Schema(
       default: "submitted_to_coordinator",
     },
     reviewComment: { type: String, default: "" },
+    submittedToCoordinatorAt: { type: Date },
     reviewedAt: { type: Date },
     reviewedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -368,6 +370,24 @@ const materialSchema = new mongoose.Schema({
 materialSchema.index({ course: 1 });
 materialSchema.index({ teacherId: 1 });
 
+const teacherDraftSchema = new mongoose.Schema(
+  {
+    teacherId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      unique: true,
+    },
+    drafts: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
+  },
+  { timestamps: true }
+);
+
+teacherDraftSchema.index({ teacherId: 1 }, { unique: true });
+
 // ============== MODELS ==============
 
 export const User = (mongoose.models.User ||
@@ -385,6 +405,8 @@ export const TestSubmission = (mongoose.models.TestSubmission ||
   )) as mongoose.Model<any>;
 export const Material = (mongoose.models.Material ||
   mongoose.model("Material", materialSchema)) as mongoose.Model<any>;
+export const TeacherDraft = (mongoose.models.TeacherDraft ||
+  mongoose.model("TeacherDraft", teacherDraftSchema)) as mongoose.Model<any>;
 
 // ============== AUTH HELPERS ==============
 

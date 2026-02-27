@@ -84,6 +84,8 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [expandedCoordinatorTests, setExpandedCoordinatorTests] = useState<Set<string>>(new Set());
   const [expandedTeacherSubmissions, setExpandedTeacherSubmissions] = useState<Set<string>>(new Set());
+  const [submissionSortBy, setSubmissionSortBy] = useState<'latest' | 'oldest' | 'topic'>('latest');
+  const [topicFilter, setTopicFilter] = useState<string>('all');
 
   const myTests = tests.filter(t => t.coordinatorId === user._id || (typeof t.coordinatorId === 'object' && t.coordinatorId?._id === user._id));
   const pendingApproval = myTests.filter(t => !t.approved);
@@ -91,6 +93,30 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
   const pendingTeacherReview = teacherSubmissions.filter(
     t => t.reviewStatus !== 'accepted_by_coordinator'
   );
+  const teacherTopics = Array.from(
+    new Set(pendingTeacherReview.map(t => (t.topic || 'General').trim() || 'General'))
+  ).sort((a, b) => a.localeCompare(b));
+
+  const getSubmissionTime = (test: Test): number =>
+    new Date(test.submittedToCoordinatorAt || test.createdAt || 0).getTime();
+
+  const filteredTeacherReview = pendingTeacherReview.filter((test) => {
+    if (topicFilter === 'all') return true;
+    const normalized = (test.topic || 'General').trim() || 'General';
+    return normalized.toLowerCase() === topicFilter.toLowerCase();
+  });
+
+  const sortedTeacherReview = [...filteredTeacherReview].sort((a, b) => {
+    if (submissionSortBy === 'topic') {
+      const byTopic = (a.topic || 'General').localeCompare(b.topic || 'General');
+      if (byTopic !== 0) return byTopic;
+      return getSubmissionTime(b) - getSubmissionTime(a);
+    }
+    if (submissionSortBy === 'oldest') {
+      return getSubmissionTime(a) - getSubmissionTime(b);
+    }
+    return getSubmissionTime(b) - getSubmissionTime(a);
+  });
 
   // Fetch teacher questions when course changes
   useEffect(() => {
@@ -429,6 +455,48 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     }
   };
 
+  const renderQuestionPreview = (q: Question, qIdx: number) => (
+    <div key={qIdx} className="text-sm border-l-2 border-gray-200 pl-3 py-1">
+      <p className="font-medium text-gray-800">
+        Q{qIdx + 1}. {q.question}
+        {!q.question && q.questionImage && <span className="text-gray-400 italic">(Image question)</span>}
+      </p>
+      {q.questionImage && (
+        <img src={q.questionImage} alt="Question" className="mt-1 max-h-20 rounded border" />
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+        {(q.options || []).map((opt, optIdx) => (
+          <div
+            key={optIdx}
+            className={`rounded border px-2 py-1 ${
+              optIdx === q.correct ? 'border-green-300 bg-green-50 text-green-700 font-semibold' : 'border-gray-200'
+            }`}
+          >
+            <p>
+              {String.fromCharCode(65 + optIdx)}. {opt || (!q.optionImages?.[optIdx] ? '(empty)' : '')}
+              {optIdx === q.correct && ' ✓'}
+            </p>
+            {q.optionImages?.[optIdx] && (
+              <img
+                src={q.optionImages[optIdx]}
+                alt={`Option ${String.fromCharCode(65 + optIdx)}`}
+                className="mt-1 max-h-16 rounded border"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+      {(q.explanation || q.explanationImage) && (
+        <div className="mt-2 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded p-2">
+          {q.explanation && <p>Tip: {q.explanation}</p>}
+          {q.explanationImage && (
+            <img src={q.explanationImage} alt="Explanation" className="mt-1 max-h-20 rounded border" />
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <header className="bg-white shadow-md border-b border-blue-200">
@@ -731,15 +799,57 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                 <p className="text-gray-600">No teacher submissions pending review.</p>
               ) : (
                 <div className="space-y-4">
-                  {pendingTeacherReview.map((test) => {
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-gray-50 border rounded-lg">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Sort By</label>
+                      <select
+                        value={submissionSortBy}
+                        onChange={(e) => setSubmissionSortBy(e.target.value as 'latest' | 'oldest' | 'topic')}
+                        className="w-full px-3 py-2 border rounded-md text-sm"
+                      >
+                        <option value="latest">Latest Submission</option>
+                        <option value="oldest">Oldest Submission</option>
+                        <option value="topic">Topic</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Topic Filter</label>
+                      <select
+                        value={topicFilter}
+                        onChange={(e) => setTopicFilter(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-md text-sm"
+                      >
+                        <option value="all">All Topics</option>
+                        {teacherTopics.map((topic) => (
+                          <option key={topic} value={topic}>
+                            {topic}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {sortedTeacherReview.length === 0 && (
+                    <p className="text-sm text-gray-600">No submissions match this topic filter.</p>
+                  )}
+
+                  {sortedTeacherReview.map((test) => {
                     const isExpanded = expandedTeacherSubmissions.has(test._id);
+                    const topic = (test.topic || 'General').trim() || 'General';
+                    const submittedAt = test.submittedToCoordinatorAt || test.createdAt;
                     return (
                     <div key={test._id} className="border rounded-lg p-4">
                       <div className="flex justify-between items-start gap-3">
                         <div>
                           <p className="font-semibold">{test.title}</p>
+                          <p className="text-xs text-gray-600 mt-1">
+                            Topic: <span className="font-medium">{topic}</span>
+                          </p>
                           <p className="text-xs text-gray-500">
                             {test.reviewStatus === 'changes_requested' ? 'Resubmitted after feedback' : 'Pending coordinator review'}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Submitted: {submittedAt ? new Date(submittedAt).toLocaleString() : 'Unknown'}
                           </p>
                           {!!test.reviewComment && (
                             <p className="text-sm text-red-700 mt-2 bg-red-50 border border-red-200 rounded p-2">
@@ -791,25 +901,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                                 {getSubjectLabel(section.subject)} ({section.questions?.length || 0}Q x {section.marksPerQuestion}m)
                               </h4>
                               <div className="space-y-2 pl-4">
-                                {section.questions?.map((q, qIdx) => q && (
-                                  <div key={qIdx} className="text-sm border-l-2 border-gray-200 pl-3 py-1">
-                                    <p className="font-medium text-gray-800">
-                                      Q{qIdx + 1}. {q.question}
-                                      {!q.question && q.questionImage && <span className="text-gray-400 italic">(Image question)</span>}
-                                    </p>
-                                    {q.questionImage && (
-                                      <img src={q.questionImage} alt="Question" className="mt-1 max-h-20 rounded border" />
-                                    )}
-                                    <div className="flex flex-wrap gap-3 mt-1 text-gray-600">
-                                      {q.options?.map((opt, optIdx) => (
-                                        <span key={optIdx} className={optIdx === q.correct ? 'text-green-700 font-semibold' : ''}>
-                                          {String.fromCharCode(65 + optIdx)}. {opt || (q.optionImages?.[optIdx] ? '(image)' : '(empty)')}{optIdx === q.correct && ' ✓'}
-                                        </span>
-                                      ))}
-                                    </div>
-                                    {q.explanation && <p className="text-xs text-blue-600 mt-1">Tip: {q.explanation}</p>}
-                                  </div>
-                                ))}
+                                {section.questions?.map((q, qIdx) => q && renderQuestionPreview(q, qIdx))}
                               </div>
                             </div>
                           ))}
@@ -933,25 +1025,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                                   {getSubjectLabel(section.subject)} ({section.questions?.length || 0}Q × {section.marksPerQuestion}m)
                                 </h4>
                                 <div className="space-y-2 pl-4">
-                                  {section.questions?.map((q, qIdx) => q && (
-                                    <div key={qIdx} className="text-sm border-l-2 border-gray-200 pl-3 py-1">
-                                      <p className="font-medium text-gray-800">
-                                        Q{qIdx + 1}. {q.question}
-                                        {!q.question && q.questionImage && <span className="text-gray-400 italic">(Image question)</span>}
-                                      </p>
-                                      {q.questionImage && (
-                                        <img src={q.questionImage} alt="Question" className="mt-1 max-h-20 rounded border" />
-                                      )}
-                                      <div className="flex flex-wrap gap-3 mt-1 text-gray-600">
-                                        {q.options?.map((opt, optIdx) => (
-                                          <span key={optIdx} className={optIdx === q.correct ? 'text-green-700 font-semibold' : ''}>
-                                            {String.fromCharCode(65 + optIdx)}. {opt || (q.optionImages?.[optIdx] ? '(image)' : '(empty)')}{optIdx === q.correct && ' ✓'}
-                                          </span>
-                                        ))}
-                                      </div>
-                                      {q.explanation && <p className="text-xs text-blue-600 mt-1">💡 {q.explanation}</p>}
-                                    </div>
-                                  ))}
+                                  {section.questions?.map((q, qIdx) => q && renderQuestionPreview(q, qIdx))}
                                 </div>
                               </div>
                             ))}
