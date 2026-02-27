@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Award, LogOut, Eye, EyeOff, Clock} from 'lucide-react'
+import { Award, LogOut, Eye, EyeOff, Clock, Download } from 'lucide-react'
+import { writeFile, utils as XLSXUtils } from 'xlsx'
 import type { User, Test, Course, TestSubmission, SubjectKey, Subject } from '../types'
 import { api } from '../api'
 
@@ -420,6 +421,137 @@ const AdminView: React.FC<AdminViewProps> = ({
 
   // Get unique subjects present across all valid attempts for top performers
   const allSubjectsInAttempts = getUniqueSubjects(validAttempts)
+
+  // ========================
+  // EXCEL EXPORT FUNCTION
+  // ========================
+  const exportRankingsToExcel = () => {
+    const wb = XLSXUtils.book_new()
+
+    // Sheet 1: Overall Rankings
+    const overallData = [
+      ['Rank', 'Student Name', 'Email', 'Tests Attempted', 'Total Score', 'Total Max Score', 'Percentage'],
+      ...overallRankings.map((student, idx) => [
+        idx + 1,
+        student.name,
+        student.email,
+        student.testsAttempted,
+        student.totalScore,
+        student.totalMaxScore,
+        `${student.percentage}%`,
+      ]),
+    ]
+    const overallSheet = XLSXUtils.aoa_to_sheet(overallData)
+    overallSheet['!cols'] = [
+      { wch: 8 },
+      { wch: 25 },
+      { wch: 30 },
+      { wch: 18 },
+      { wch: 15 },
+      { wch: 18 },
+      { wch: 12 },
+    ]
+    XLSXUtils.book_append_sheet(wb, overallSheet, 'Overall Rankings')
+
+    // Sheet 2: Test-wise Rankings
+    if (sortedSubmissions.length > 0) {
+      const headers = [
+        'Rank',
+        'Student Name',
+        'Email',
+        'Test',
+        ...rankingSubjects.map(s => getSubjectLabel(s)),
+        'Total Score',
+        'Percentage',
+      ]
+      const testData = [
+        headers,
+        ...sortedSubmissions.map((sub, idx) => {
+          const sectionResults = sub.sectionResults || []
+          const subjectScores = rankingSubjects.map(subject => {
+            const sr = sectionResults.find(s => s?.subject === subject)
+            return sr ? `${sr.score}/${sr.maxScore}` : '—'
+          })
+          return [
+            idx + 1,
+            getStudentName(sub),
+            getStudentEmail(sub),
+            getTestTitle(sub),
+            ...subjectScores,
+            `${sub.totalScore || 0}/${sub.totalMaxScore || 0}`,
+            `${sub.percentage || 0}%`,
+          ]
+        }),
+      ]
+      const testSheet = XLSXUtils.aoa_to_sheet(testData)
+      const colWidths = [
+        { wch: 8 },
+        { wch: 25 },
+        { wch: 30 },
+        { wch: 25 },
+        ...rankingSubjects.map(() => ({ wch: 15 })),
+        { wch: 18 },
+        { wch: 12 },
+      ]
+      testSheet['!cols'] = colWidths
+      XLSXUtils.book_append_sheet(wb, testSheet, 'Test-wise Rankings')
+    }
+
+    // Sheet 3: Subject-wise Top Performers
+    const subjectTopData: any[] = []
+    allSubjectsInAttempts.forEach(subject => {
+      const subInfo = getSubjectInfo(subject)
+      const subjectScores = validAttempts
+        .map(a => {
+          if (!a?.sectionResults) return null
+          const sr = a.sectionResults.find(s => s?.subject === subject)
+          if (!sr || !sr.maxScore || sr.maxScore === 0) return null
+          return {
+            name: getStudentName(a),
+            email: getStudentEmail(a),
+            score: sr.score || 0,
+            maxScore: sr.maxScore,
+            pct: Math.round(((sr.score || 0) / sr.maxScore) * 100),
+          }
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null)
+        .sort((a, b) => b.pct - a.pct)
+        .slice(0, 5)
+
+      if (subjectScores.length > 0) {
+        subjectTopData.push(
+          [`${subInfo.label} - Top Performers`],
+          ['Rank', 'Student Name', 'Email', 'Score', 'Max Score', 'Percentage'],
+          ...subjectScores.map((s, i) => [
+            i + 1,
+            s.name,
+            s.email,
+            s.score,
+            s.maxScore,
+            `${s.pct}%`,
+          ]),
+          [''],
+        )
+      }
+    })
+
+    if (subjectTopData.length > 0) {
+      const subjectSheet = XLSXUtils.aoa_to_sheet(subjectTopData)
+      subjectSheet['!cols'] = [
+        { wch: 8 },
+        { wch: 25 },
+        { wch: 30 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 12 },
+      ]
+      XLSXUtils.book_append_sheet(wb, subjectSheet, 'Top Performers')
+    }
+
+    // Generate filename with timestamp
+    const timestamp = new Date().toISOString().split('T')[0]
+    writeFile(wb, `Test-Results-${timestamp}.xlsx`)
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -855,6 +987,18 @@ const AdminView: React.FC<AdminViewProps> = ({
         {/* ======================== RANKINGS TAB ======================== */}
         {activeTab === 'rankings' && (
           <div className="space-y-6">
+            {/* Export Button */}
+            <div className="flex gap-3">
+              <button
+                onClick={exportRankingsToExcel}
+                disabled={validAttempts.length === 0}
+                className="flex items-center gap-2 px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors font-medium"
+              >
+                <Download size={20} />
+                Download Results (Excel)
+              </button>
+            </div>
+
             {/* Overall Rankings */}
             <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-xl font-bold mb-4">🏆 Overall Student Rankings</h2>
