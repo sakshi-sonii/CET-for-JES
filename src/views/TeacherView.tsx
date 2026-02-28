@@ -102,6 +102,10 @@ const getSubjectInfo = (key: string) =>
 const getMarksPerQuestion = (subject: string) =>
   subject === 'maths' ? 2 : 1;
 
+const CHUNK_SAFE_LIMIT_BYTES = Math.floor(3.2 * 1024 * 1024);
+const CHUNK_UPLOAD_MAX_RETRIES = 3;
+const DRAFT_SYNC_SAFE_LIMIT_BYTES = Math.floor(3.2 * 1024 * 1024);
+
 const DRAFTS_STORAGE_KEY = 'teacher_test_drafts';
 
 const TeacherView: React.FC<TeacherViewProps> = ({
@@ -314,7 +318,96 @@ const TeacherView: React.FC<TeacherViewProps> = ({
 
   const syncDraftsToDatabase = useCallback(async (draftsToSync: DraftTest[]) => {
     if (!Array.isArray(draftsToSync)) return;
-    await api('teacher-drafts', 'PUT', { drafts: draftsToSync });
+
+    const getPayloadSize = (payload: any): number =>
+      new Blob([JSON.stringify(payload)]).size;
+
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    const putWithRetry = async (payload: any) => {
+      let lastError: any = null;
+      for (let attempt = 1; attempt <= CHUNK_UPLOAD_MAX_RETRIES; attempt++) {
+        try {
+          return await api('teacher-drafts', 'PUT', payload);
+        } catch (err: any) {
+          lastError = err;
+          if (attempt < CHUNK_UPLOAD_MAX_RETRIES) {
+            await delay(500 * 2 ** (attempt - 1));
+          }
+        }
+      }
+      throw new Error(lastError?.message || 'Failed to sync drafts');
+    };
+
+    const fullPayload = { mode: 'full', drafts: draftsToSync };
+    if (getPayloadSize(fullPayload) <= DRAFT_SYNC_SAFE_LIMIT_BYTES) {
+      await putWithRetry(fullPayload);
+      return;
+    }
+
+    const chunks: DraftTest[][] = [];
+    let currentChunk: DraftTest[] = [];
+
+    for (const draft of draftsToSync) {
+      const candidateChunk = [...currentChunk, draft];
+      const candidatePayload = {
+        mode: 'chunk_part',
+        sessionId: 'size-check',
+        chunkIndex: 0,
+        totalChunks: 1,
+        drafts: candidateChunk,
+      };
+      const candidateSize = getPayloadSize(candidatePayload);
+
+      if (candidateSize <= DRAFT_SYNC_SAFE_LIMIT_BYTES) {
+        currentChunk.push(draft);
+        continue;
+      }
+
+      const singleDraftPayload = {
+        mode: 'chunk_part',
+        sessionId: 'size-check',
+        chunkIndex: 0,
+        totalChunks: 1,
+        drafts: [draft],
+      };
+      if (currentChunk.length === 0 || getPayloadSize(singleDraftPayload) > DRAFT_SYNC_SAFE_LIMIT_BYTES) {
+        throw new Error(
+          'A single draft is too large to sync. Remove/compress very large images in that draft and try again.'
+        );
+      }
+
+      chunks.push(currentChunk);
+      currentChunk = [draft];
+    }
+
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk);
+    }
+
+    const sessionId = `draftsync_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const totalChunks = chunks.length;
+
+    await putWithRetry({
+      mode: 'chunk_init',
+      sessionId,
+      totalChunks,
+    });
+
+    for (let i = 0; i < totalChunks; i++) {
+      await putWithRetry({
+        mode: 'chunk_part',
+        sessionId,
+        chunkIndex: i,
+        totalChunks,
+        drafts: chunks[i],
+      });
+    }
+
+    await putWithRetry({
+      mode: 'chunk_finalize',
+      sessionId,
+    });
   }, []);
 
   const handleLogout = useCallback(async () => {
@@ -903,35 +996,138 @@ const TeacherView: React.FC<TeacherViewProps> = ({
     try {
       const filteredSections = sections.filter(s => s.questions.length > 0);
       const activeSubjects = filteredSections.map(s => s.subject);
+      const normalizedTitle = testTitle.trim();
+      const normalizedTopic = testTopic.trim() || 'General';
 
-      const payload: any = {
-        title: testTitle,
-        topic: testTopic.trim() || 'General',
+      const normalizeQuestionPayload = (q: Question) => ({
+        question: q.question,
+        questionImage: q.questionImage || undefined,
+        options: q.options,
+        optionImages:
+          q.optionImages && q.optionImages.some(img => img)
+            ? q.optionImages
+            : undefined,
+        correct: q.correct,
+        explanation: q.explanation || '',
+        explanationImage: q.explanationImage || undefined,
+      });
+
+      const buildSectionsFromFlat = (flatQuestions: { subject: SubjectKey; question: Question }[]) => {
+        const sectionMap = new Map<SubjectKey, { subject: SubjectKey; marksPerQuestion: number; questions: any[] }>();
+        for (const { subject, question } of flatQuestions) {
+          if (!sectionMap.has(subject)) {
+            sectionMap.set(subject, {
+              subject,
+              marksPerQuestion: getMarksPerQuestion(subject),
+              questions: [],
+            });
+          }
+          sectionMap.get(subject)!.questions.push(normalizeQuestionPayload(question));
+        }
+        return Array.from(sectionMap.values());
+      };
+
+      const buildBasePayload = (flatQuestions: { subject: SubjectKey; question: Question }[]) => ({
+        title: normalizedTitle,
+        topic: normalizedTopic,
         course: testCourse,
         testType: 'custom',
         showAnswerKey: false,
-        sections: filteredSections.map(s => ({
-          subject: s.subject,
-          marksPerQuestion: getMarksPerQuestion(s.subject),
-          questions: s.questions.map(q => ({
-            question: q.question,
-            questionImage: q.questionImage || undefined,
-            options: q.options,
-            optionImages:
-              q.optionImages && q.optionImages.some(img => img)
-                ? q.optionImages
-                : undefined,
-            correct: q.correct,
-            explanation: q.explanation || '',
-            explanationImage: q.explanationImage || undefined,
-          })),
-        })),
+        sections: buildSectionsFromFlat(flatQuestions),
+        customDuration: 60,
+        customSubjects: activeSubjects,
+      });
+
+      const getPayloadSize = (payload: any): number =>
+        new Blob([JSON.stringify(payload)]).size;
+
+      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+      const postChunkWithRetry = async (payload: any, chunkNumber: number, totalChunks: number) => {
+        let lastError: any = null;
+        for (let attempt = 1; attempt <= CHUNK_UPLOAD_MAX_RETRIES; attempt++) {
+          try {
+            return await api('tests', 'POST', payload);
+          } catch (err: any) {
+            lastError = err;
+            if (attempt < CHUNK_UPLOAD_MAX_RETRIES) {
+              await delay(500 * 2 ** (attempt - 1));
+            }
+          }
+        }
+        throw new Error(
+          `Failed uploading chunk ${chunkNumber}/${totalChunks}. ${lastError?.message || 'Please retry.'}`
+        );
       };
 
-      payload.customDuration = 60;
-      payload.customSubjects = activeSubjects;
+      const flatAllQuestions: { subject: SubjectKey; question: Question }[] = [];
+      for (const section of filteredSections) {
+        for (const question of section.questions) {
+          flatAllQuestions.push({ subject: section.subject, question });
+        }
+      }
 
-      await api('tests', 'POST', payload);
+      const fullPayload = buildBasePayload(flatAllQuestions);
+      const fullPayloadSize = getPayloadSize(fullPayload);
+
+      if (fullPayloadSize <= CHUNK_SAFE_LIMIT_BYTES) {
+        await api('tests', 'POST', fullPayload);
+      } else {
+        const chunks: { subject: SubjectKey; question: Question }[][] = [];
+        let currentChunk: { subject: SubjectKey; question: Question }[] = [];
+
+        for (const item of flatAllQuestions) {
+          const candidateChunk = [...currentChunk, item];
+          const candidatePayload = buildBasePayload(candidateChunk);
+          const candidateSize = getPayloadSize(candidatePayload);
+
+          if (candidateSize <= CHUNK_SAFE_LIMIT_BYTES) {
+            currentChunk.push(item);
+            continue;
+          }
+
+          if (currentChunk.length === 0) {
+            throw new Error(
+              'A single question is too large to upload. Compress/remove large images for that question and retry.'
+            );
+          }
+
+          chunks.push(currentChunk);
+          currentChunk = [item];
+        }
+
+        if (currentChunk.length > 0) {
+          chunks.push(currentChunk);
+        }
+
+        const totalChunks = chunks.length;
+        let rootTestId: string | null = null;
+
+        try {
+          for (let i = 0; i < totalChunks; i++) {
+            const payload: any = buildBasePayload(chunks[i]);
+            payload.isChunk = true;
+            payload.chunkInfo = { current: i + 1, total: totalChunks };
+            if (i > 0 && rootTestId) {
+              payload.parentTestId = rootTestId;
+            }
+
+            const created = await postChunkWithRetry(payload, i + 1, totalChunks);
+            if (i === 0) {
+              rootTestId = created._id;
+            }
+          }
+        } catch (chunkError) {
+          if (rootTestId) {
+            try {
+              await api(`tests?testId=${encodeURIComponent(rootTestId)}`, 'DELETE');
+            } catch {
+              // Best-effort rollback only.
+            }
+          }
+          throw chunkError;
+        }
+      }
 
       // Clear current draft after successful creation
       clearCurrentDraft();

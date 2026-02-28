@@ -653,18 +653,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(400).json({ message: "Comment is required when sending back for edits" });
         }
 
-        const test = await withRetry(() =>
-          Test.findOne({
-            _id: testId,
+        const groupIds = await getChunkGroupIds(testId);
+        if (!groupIds.length) {
+          return res.status(404).json({ message: "Teacher submission not found" });
+        }
+        const groupObjectIds = groupIds.map((id) => new mongoose.Types.ObjectId(id));
+
+        const reviewableGroup = await withRetry(() =>
+          Test.find({
+            _id: { $in: groupObjectIds },
             teacherId: { $exists: true, $ne: null },
             approved: false,
           })
-            .select("_id reviewStatus")
+            .select("_id")
             .lean()
         );
-
-        if (!test) {
+        if (!reviewableGroup.length) {
           return res.status(404).json({ message: "Teacher submission not found" });
+        }
+        if (reviewableGroup.length !== groupIds.length) {
+          return res.status(400).json({
+            message: "Some parts of this submission cannot be reviewed in current state",
+          });
         }
 
         const update: any =
@@ -681,11 +691,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         update.reviewedAt = new Date();
         update.reviewedBy = new mongoose.Types.ObjectId(currentUser._id.toString());
 
-        const updated = await withRetry(() =>
-          Test.findByIdAndUpdate(testId, update, { new: true }).lean()
+        await withRetry(() =>
+          Test.updateMany(
+            { _id: { $in: groupObjectIds } },
+            update
+          )
         );
 
-        return res.status(200).json(updated);
+        const updatedGroup = await withRetry(() =>
+          Test.find({ _id: { $in: groupObjectIds } }).lean()
+        );
+        if (!updatedGroup.length) {
+          return res.status(404).json({ message: "Teacher submission not found" });
+        }
+        if (updatedGroup.length > 1 || updatedGroup.some((doc: any) => hasChunkMeta(doc))) {
+          return res.status(200).json(mergeChunkGroup(updatedGroup));
+        }
+        return res.status(200).json(updatedGroup[0]);
       }
 
       // Handle regular PATCH
