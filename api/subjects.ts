@@ -57,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const tests = await withRetry(() =>
           Test.find(query)
             .populate("teacherId", "name email")
-            .select("_id title sections")
+            .select("_id title teacherId sections")
             .lean()
         );
 

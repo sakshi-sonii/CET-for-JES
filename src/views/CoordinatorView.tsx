@@ -129,27 +129,26 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     setLoading(true);
     setError('');
     try {
-      // Fetch all tests and filter for teacher-submitted tests in this course
-      const allTests = (await api('tests', 'GET')) || [];
+      // Use dedicated coordinator question-bank endpoint (returns teacher tests
+      // accepted by coordinator for the selected course).
+      const availableTests =
+        (await api(`subjects?action=questions&courseId=${encodeURIComponent(courseId)}`, 'GET')) || [];
 
-      // Filter for tests that have a teacherId and match the selected course
-      const availableTests = allTests.filter((test: any) => {
-        return test.teacherId && test.course === courseId;
-      });
-
-      // Organize by teacher and subject
+      // Organize by teacher, subject, and source test so coordinators can
+      // pick questions from multiple tests of the same subject.
       const bankMap = new Map<string, TeacherQuestionsBank>();
 
       for (const test of availableTests) {
         for (const section of test.sections || []) {
-          const key = `${test.teacherId}_${section.subject}`;
+          const teacherId = typeof test.teacherId === 'object' ? test.teacherId._id : test.teacherId;
+          const key = `${teacherId}_${section.subject}_${test._id}`;
           if (!bankMap.has(key)) {
             const teacherName = typeof test.teacherId === 'object' 
               ? (test.teacherId.name || '')
               : '';
             
             bankMap.set(key, {
-              teacherId: typeof test.teacherId === 'object' ? test.teacherId._id : test.teacherId,
+              teacherId,
               teacherName,
               subject: section.subject as SubjectKey,
               testId: test._id,
@@ -168,8 +167,8 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
     }
   };
 
-  const toggleTeacherExpanded = (teacherId: string, subject: SubjectKey) => {
-    const key = `${teacherId}_${subject}`;
+  const toggleTeacherExpanded = (teacherId: string, subject: SubjectKey, testId: string) => {
+    const key = `${teacherId}_${subject}_${testId}`;
     const newExpanded = new Set(expandedTeachers);
     if (newExpanded.has(key)) {
       newExpanded.delete(key);
@@ -581,7 +580,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                   {!loading && teacherQuestions.length > 0 && (
                     <div className="space-y-3">
                       {teacherQuestions.map((bank) => {
-                        const key = `${bank.teacherId}_${bank.subject}`;
+                        const key = `${bank.teacherId}_${bank.subject}_${bank.testId}`;
                         const isExpanded = expandedTeachers.has(key);
                         const selected = draftTest.selectedQuestions.find(
                           sq => sq.sourceTestId === bank.testId && sq.subject === bank.subject
@@ -590,7 +589,7 @@ const CoordinatorView: React.FC<CoordinatorViewProps> = ({
                         return (
                           <div key={key} className="border border-gray-200 rounded-lg overflow-hidden">
                             <button
-                              onClick={() => toggleTeacherExpanded(bank.teacherId, bank.subject)}
+                              onClick={() => toggleTeacherExpanded(bank.teacherId, bank.subject, bank.testId)}
                               className="w-full p-4 bg-gray-50 hover:bg-gray-100 flex justify-between items-center"
                             >
                               <div className="text-left">
